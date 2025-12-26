@@ -150,8 +150,7 @@ class TimelinePanel(BasePanel):
         # Check for selection of timeline objects
         assert len(self.visible_objects) == len(self.timeline_object_rects), \
             f"Timeline Panel: Visible object and rectangle lists out of sync. Entries: {len(self.visible_objects)}, rects: {len(self.timeline_object_rects)}"
-        if self.selected_timeline_entry is not None:
-            self.selected_timeline_entry.timeline_object.ui_is_selected = False
+        got_valid_click = False
         for entry, rect in zip(self.visible_objects, self.timeline_object_rects):
             if not rect.contains(mouse_position):
                 entry.timeline_object.ui_is_selected = False
@@ -159,6 +158,7 @@ class TimelinePanel(BasePanel):
 
             self.selected_timeline_entry = entry
             self.selected_timeline_entry.timeline_object.ui_is_selected = True
+            got_valid_click = True
 
             if rect.x() + rect.width() - mouse_position.x() < self.object_side_handle_width:
                 self.selected_entry_handle = 'right'
@@ -172,7 +172,8 @@ class TimelinePanel(BasePanel):
             self.project.application_state.signal_timeline_content_update.emit()  # Inform other timeline panels that the selection status changed
             self.compute_snap_frames()
             break
-
+        if not got_valid_click:
+            self.update()
         event.ignore()
 
     def mouseMoveEvent(self, event:QMouseEvent):
