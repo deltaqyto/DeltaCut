@@ -22,16 +22,18 @@ class TimelinePanel(BasePanel):
         self.project.application_state.signal_timeline_lock_update.connect(self.handle_timeline_lock_update)
         self.project.application_state.signal_frame_number_update.connect(self.handle_frame_number_update)
 
+        # Mouse handling configuration
         self.channel_height: int = 40  # px height of each channel
         self.channel_padding: int = 2  # px padding, applied on either side of the timeline object
 
         self.minimum_drag_distance: int = 10  # px of drag distance required to unlock drag handle
+        self.handle_snap_distance: int = 5  # px of proximity required to snap a handle to a near point
 
         self.object_side_handle_width: int = 20  # px region which is considered to be in range of the left/right handles
         self.playhead_collider_width: int = 10  # px size which is considered to be in range of the playhead line
         self.maximum_playhead_drag_update_period: float = 1/10  # Minimum time to wait between triggering updates to the frame_number
 
-        # Mouse handling controls
+        # Mouse handling state variables
         self.drag_start_position: QPointF = QPointF()
         self.is_dragging_handle_lock: bool = False
         self.is_dragging_handle: bool = False
@@ -45,6 +47,7 @@ class TimelinePanel(BasePanel):
 
         self.last_frame_update_time: float = 0  # Seconds since the last update to the frame number, from dragging the playhead
         self.old_stop_frame: int = 0  # Frame number of the object end. Used for left handle adjustment
+        self.handle_snap_frames: list[int] = []  # List of frames which the currently selected handle can snap to
 
         self.viewport_left: int = 0  # First visible frame
         self.viewport_right: int = 0  # Last visible frame
@@ -165,7 +168,9 @@ class TimelinePanel(BasePanel):
                 self.selected_entry_frame_offset = mouse_frame_position - entry.start_frame
 
             self.project.application_state.signal_timeline_content_update.emit()  # Inform other timeline panels that the selection status changed
+            self.compute_snap_frames()
             break
+
         event.ignore()
 
     def mouseMoveEvent(self, event:QMouseEvent):
@@ -174,6 +179,16 @@ class TimelinePanel(BasePanel):
             return
 
         mouse_frame_position = self.map_pixel_to_frame(event.position().x(), self.drag_pixels_per_frame, self.drag_viewport_left)
+
+        # Snap to nearby targets
+        closest_snap_frame = None
+        closest_snap_distance = self.handle_snap_distance
+        for snap_frame in self.handle_snap_frames:
+            if abs(mouse_frame_position - snap_frame) < min(closest_snap_distance, self.handle_snap_distance):
+                closest_snap_frame = snap_frame
+                closest_snap_distance = abs(mouse_frame_position - snap_frame)
+        if closest_snap_frame is not None:
+            mouse_frame_position = closest_snap_frame
 
         # Handle playhead movement
         if self.is_dragging_playhead:
@@ -294,3 +309,19 @@ class TimelinePanel(BasePanel):
 
         frame_number = viewport_left + pixel_number / pixels_per_frame
         return floor(frame_number)
+
+    def compute_snap_frames(self):
+        """Given currently selected entry, compute valid snap frames in the timeline"""
+        assert self.selected_entry_handle in ['top', 'left', 'right'], f"Timeline Panel: Got invalid entry handle when computing snap frames: {self.selected_entry_handle}"
+        assert self.selected_timeline_entry is not None, f"Timeline Panel: Timeline entry is empty when computing snap frames"
+        self.handle_snap_frames = []
+
+        # 1. The start and end frames of the timeline are valid snap points
+        self.handle_snap_frames += [self.project.timeline.get_start(), self.project.timeline.get_duration()]
+
+        # 2. The current location of the left and right handles are a valid snap point
+        self.handle_snap_frames += [self.selected_timeline_entry.start_frame, self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.duration]
+
+        # 3. The true duration (if set) is a valid snap point for the right handle only
+        if self.selected_entry_handle == 'right':
+            self.handle_snap_frames.append(self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.true_duration)
