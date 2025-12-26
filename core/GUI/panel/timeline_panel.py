@@ -1,8 +1,9 @@
 from math import ceil, floor
 from time import time
 
-from PyQt6.QtCore import QRect, QLineF, QPointF, QPoint, pyqtSlot
+from PyQt6.QtCore import QRect, QLineF, QPointF, QPoint, pyqtSlot, Qt
 from PyQt6.QtGui import QPaintEvent, QPainter, QColor, QResizeEvent, QMouseEvent
+from PyQt6.QtWidgets import QApplication
 
 from core.GUI.panel.base_panel import BasePanel
 from core.GUI.themes import ACTIVE_THEME
@@ -181,15 +182,16 @@ class TimelinePanel(BasePanel):
 
         mouse_frame_position = self.map_pixel_to_frame(event.position().x(), self.drag_pixels_per_frame, self.drag_viewport_left)
 
-        # Snap to nearby targets
-        closest_snap_frame = None
-        closest_snap_distance = self.handle_snap_distance
-        for snap_frame in self.handle_snap_frames:
-            if abs(mouse_frame_position - snap_frame) < min(closest_snap_distance, self.handle_snap_distance):
-                closest_snap_frame = snap_frame
-                closest_snap_distance = abs(mouse_frame_position - snap_frame)
-        if closest_snap_frame is not None:
-            mouse_frame_position = closest_snap_frame
+        if not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:  # Disable snapping when CTRL is pressed
+            # Snap to nearby targets
+            closest_snap_frame = None
+            closest_snap_distance = self.handle_snap_distance
+            for snap_frame in self.handle_snap_frames:
+                if abs(mouse_frame_position - snap_frame) < min(closest_snap_distance, self.handle_snap_distance):
+                    closest_snap_frame = snap_frame
+                    closest_snap_distance = abs(mouse_frame_position - snap_frame)
+            if closest_snap_frame is not None:
+                mouse_frame_position = closest_snap_frame
 
         # Handle playhead movement
         if self.is_dragging_playhead:
