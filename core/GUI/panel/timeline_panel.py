@@ -33,13 +33,16 @@ class TimelinePanel(BasePanel):
 
         # Mouse handling controls
         self.drag_start_position: QPointF = QPointF()
-        self.is_dragging: bool = False
-        self.is_dragging_unlocked: bool = False
+        self.is_dragging_handle_lock: bool = False
+        self.is_dragging_handle: bool = False
         self.is_dragging_playhead: bool = False
         self.selected_timeline_entry: TimelineEntry|None = None
         self.selected_entry_handle: str = ''  # top, left, right
         self.selected_entry_frame_offset: int = 0  # px of x offset from start of timeline object to mouse position
+
         self.drag_pixels_per_frame: float = 0  # Pixels per frame, locked to when a drag starts
+        self.drag_viewport_left: int = 0  # First visible frame, locked to when a drag starts
+
         self.last_frame_update_time: float = 0  # Seconds since the last update to the frame number, from dragging the playhead
         self.old_stop_frame: int = 0  # Frame number of the object end. Used for left handle adjustment
 
@@ -73,6 +76,7 @@ class TimelinePanel(BasePanel):
         self.update()
 
     def update_timeline_object_rects(self):
+        """Compute timeline object bounding rectangles"""
         self.timeline_object_rects = []
 
         pixels_per_frame = self.get_pixels_per_frame()
@@ -89,7 +93,6 @@ class TimelinePanel(BasePanel):
             height = self.channel_height - self.channel_padding * 2
 
             self.timeline_object_rects.append(QRect(x, y, width, height))
-
 
     def paintEvent(self, event: QPaintEvent):
         """Draw the timeline background, and all timeline elements that are visible"""
@@ -123,30 +126,35 @@ class TimelinePanel(BasePanel):
 
     def mousePressEvent(self, event: QMouseEvent):
         mouse_position: QPoint = QPoint(floor(event.position().x()), floor(event.position().y()))
-        pixels_per_frame = self.get_pixels_per_frame()
+        mouse_frame_position = self.map_pixel_to_frame(event.position().x())
         self.drag_start_position = event.position()
-        self.is_dragging = True
-        self.is_dragging_unlocked = False
-        self.drag_pixels_per_frame = pixels_per_frame
 
-        assert len(self.visible_objects) == len(self.timeline_object_rects), \
-            f"Timeline Panel: Visible object and rectangle lists out of sync. Entries: {len(self.visible_objects)}, rects: {len(self.timeline_object_rects)}"
+        self.is_dragging_handle_lock = True
+        self.is_dragging_handle = False
+        self.is_dragging_playhead = False
 
-        # Check for drag on play head
+        self.drag_pixels_per_frame = self.get_pixels_per_frame()
+        self.drag_viewport_left = self.viewport_left
+
+         # Check for drag on play head
         playhead_is_onscreen, playhead_x = self.map_frame_to_pixel(self.current_frame_number)
         if playhead_is_onscreen and abs(mouse_position.x() - playhead_x) < self.playhead_collider_width:
             self.is_dragging_playhead = True
             return  # Skip checks on timeline objects
 
+        # Check for selection of timeline objects
+        assert len(self.visible_objects) == len(self.timeline_object_rects), \
+            f"Timeline Panel: Visible object and rectangle lists out of sync. Entries: {len(self.visible_objects)}, rects: {len(self.timeline_object_rects)}"
+        if self.selected_timeline_entry is not None:
+            self.selected_timeline_entry.timeline_object.ui_is_selected = False
         for entry, rect in zip(self.visible_objects, self.timeline_object_rects):
             if not rect.contains(mouse_position):
                 entry.timeline_object.ui_is_selected = False
                 continue
-            if self.selected_timeline_entry is not None:
-                self.selected_timeline_entry.timeline_object.ui_is_selected = False
 
             self.selected_timeline_entry = entry
             self.selected_timeline_entry.timeline_object.ui_is_selected = True
+
             if rect.x() + rect.width() - mouse_position.x() < self.object_side_handle_width:
                 self.selected_entry_handle = 'right'
             elif mouse_position.x() - rect.x() < self.object_side_handle_width:
@@ -154,74 +162,87 @@ class TimelinePanel(BasePanel):
                 self.old_stop_frame = self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.duration
             else:
                 self.selected_entry_handle = 'top'
-                self.selected_entry_frame_offset = floor(mouse_position.x() / pixels_per_frame) - entry.start_frame
+                self.selected_entry_frame_offset = mouse_frame_position - entry.start_frame
+
             self.project.application_state.signal_timeline_content_update.emit()  # Inform other timeline panels that the selection status changed
             break
         event.ignore()
 
     def mouseMoveEvent(self, event:QMouseEvent):
         if self.project.application_state.is_timeline_locked:
+            event.ignore()
             return
+
+        mouse_frame_position = self.map_pixel_to_frame(event.position().x(), self.drag_pixels_per_frame, self.drag_viewport_left)
 
         # Handle playhead movement
         if self.is_dragging_playhead:
-            assert self.is_dragging, f"Timeline Panel: Dragging playhead without being in dragging state"
-            self.current_frame_number = self.map_pixel_to_frame(event.position().x())
             if time() - self.last_frame_update_time > self.maximum_playhead_drag_update_period:
-                frame_buffer = self.project.timeline.render_frame(self.current_frame_number)
-                self.project.application_state.current_playback_frame = self.current_frame_number
+                frame_buffer = self.project.timeline.render_frame(mouse_frame_position)
+
+                self.project.application_state.current_playback_frame = mouse_frame_position
                 self.project.application_state.signal_frame_number_update.emit()
+
                 self.project.application_state.rendered_frame.visual_frame = frame_buffer
                 self.project.application_state.signal_frame_buffer_update.emit()
+
                 self.last_frame_update_time = time()
             else:
-                self.update()  # Update the timeline pointer to improve apparent smoothness
+                self.current_frame_number = mouse_frame_position  # Update the timeline pointer to improve apparent smoothness
+                self.update()
             return
 
-        if self.is_dragging and not self.is_dragging_unlocked:
+        if self.is_dragging_handle_lock:
             drag_distance = ((event.position().x() - self.drag_start_position.x())**2 + (event.position().y() - self.drag_start_position.y())**2)**0.5
             if drag_distance > self.minimum_drag_distance:
-                self.is_dragging_unlocked = True
+                self.is_dragging_handle = True
+                self.is_dragging_handle_lock = False
 
-        if self.is_dragging_unlocked:
-            assert self.is_dragging, f"Timeline Panel: Dragging unlocked without being in dragging state"
-            if self.selected_entry_handle == "" or self.project.application_state.is_timeline_locked:
-                return
-
-            mouse_frame_position = floor(event.position().x() / self.drag_pixels_per_frame)
+        if self.is_dragging_handle:
             # Do we have a handle active? Work out the new channel, start and end frames of the object
+
+            new_channel = self.selected_timeline_entry.channel
+            new_start = self.selected_timeline_entry.start_frame
+            new_stop = new_start + self.selected_timeline_entry.timeline_object.duration
+
             if self.selected_entry_handle == 'top':
                 new_channel = floor(event.position().y() / self.channel_height)
                 new_start = mouse_frame_position - self.selected_entry_frame_offset
                 new_stop = new_start + self.selected_timeline_entry.timeline_object.duration
+
             elif self.selected_entry_handle == 'left':
-                new_channel = self.selected_timeline_entry.channel
                 new_start = mouse_frame_position
-                new_stop = new_start + self.selected_timeline_entry.timeline_object.duration
+
             elif self.selected_entry_handle == 'right':
-                new_channel = self.selected_timeline_entry.channel
-                new_start = self.selected_timeline_entry.start_frame
                 new_stop = mouse_frame_position
-            else:
-                raise AssertionError(f"Timeline Panel: selected entry handle has unknown name: {self.selected_entry_handle}")
 
+            else:  # No handle is set
+                event.ignore()
+                return
+
+            # Check for collisions
             if not self.project.timeline.check_collision(new_start, new_stop, new_channel, ignore_entries=[self.selected_timeline_entry]):
-                # Change the shape of the media to this new shape
 
-                if self.selected_entry_handle == 'top':  # Move the entry without changing its start offset
+                if self.selected_entry_handle == 'top':  # Move the entry without any resize
                     self.project.timeline.move_entry(self.selected_timeline_entry, new_start, new_channel)
-                elif self.selected_entry_handle == 'left':  # Move the entry's start offset only
+
+                elif self.selected_entry_handle == 'left':  # Resize by adjusting start offset but not end frame
                     current_start_offset = self.selected_timeline_entry.timeline_object.start_offset
                     start_frame_change = new_start - self.selected_timeline_entry.start_frame
+
                     # Shorten the entry by n frames from the start
-                    self.selected_timeline_entry.timeline_object.attempt_change_object_duration(desired_start_offset=current_start_offset + start_frame_change,
-                                                                                                desired_duration=self.selected_timeline_entry.timeline_object.duration - start_frame_change)
-                    # Offset it equally to make it appear it got shortened from the start
-                    self.project.timeline.move_entry(self.selected_timeline_entry, new_start, new_channel)
+                    accepted_start, accepted_duration = self.selected_timeline_entry.timeline_object.attempt_change_object_duration(
+                        desired_start_offset=current_start_offset + start_frame_change,
+                        desired_duration=self.selected_timeline_entry.timeline_object.duration - start_frame_change
+                    )
+                    # Compute start frame required to pin end frame
+                    self.project.timeline.move_entry(self.selected_timeline_entry, new_stop - accepted_duration, new_channel)
+
                 elif self.selected_entry_handle == 'right':  # Adjust the entry's duration only
                     self.selected_timeline_entry.timeline_object.attempt_change_object_duration(desired_duration=new_stop - new_start)
-                    self.selected_timeline_entry.channel = new_channel
                     self.project.application_state.signal_timeline_content_update.emit()  # Other two paths call this implicitly via timeline.move_entry
+
+        # Pass through for frame handling
         event.ignore()
 
     def mouseReleaseEvent(self, event:QMouseEvent):
@@ -232,7 +253,7 @@ class TimelinePanel(BasePanel):
         event.ignore()
 
     def get_pixels_per_frame(self):
-        # Calculate frame to pixel conversion
+        """Calculate frame to pixel conversion"""
         frame_range = self.viewport_right - self.viewport_left
         if frame_range == 0:
             return 1
@@ -242,8 +263,8 @@ class TimelinePanel(BasePanel):
 
     def stop_mouse_action(self):
         """Reset mouse handling state"""
-        self.is_dragging = False
-        self.is_dragging_unlocked = False
+        self.is_dragging_handle_lock = False
+        self.is_dragging_handle = False
         self.is_dragging_playhead = False
         self.selected_entry_handle = ''
 
@@ -260,13 +281,15 @@ class TimelinePanel(BasePanel):
             return False, frame_pixel  # Off-screen
         return True, frame_pixel
 
-    def map_pixel_to_frame(self, pixel_number, pixels_per_frame=None) -> int:
+    def map_pixel_to_frame(self, pixel_number, pixels_per_frame=None, viewport_left=None) -> int:
         """Compute the frame number on the timeline for a given pixel x
         Supports override of the pixels per frame constant
         """
 
         if pixels_per_frame is None:
             pixels_per_frame = self.get_pixels_per_frame()
+        if viewport_left is None:
+            viewport_left = self.viewport_left
 
-        frame_number = self.viewport_left + pixel_number / pixels_per_frame
-        return frame_number
+        frame_number = viewport_left + pixel_number / pixels_per_frame
+        return floor(frame_number)
