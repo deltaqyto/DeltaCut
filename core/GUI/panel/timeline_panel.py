@@ -27,7 +27,7 @@ class TimelinePanel(BasePanel):
         self.channel_padding: int = 2  # px padding, applied on either side of the timeline object
 
         self.minimum_drag_distance: int = 10  # px of drag distance required to unlock drag handle
-        self.handle_snap_distance: int = 5  # px of proximity required to snap a handle to a near point
+        self.handle_snap_distance: int = 10  # px of proximity required to snap a handle to a near point
 
         self.object_side_handle_width: int = 20  # px region which is considered to be in range of the left/right handles
         self.playhead_collider_width: int = 10  # px size which is considered to be in range of the playhead line
@@ -143,6 +143,7 @@ class TimelinePanel(BasePanel):
         playhead_is_onscreen, playhead_x = self.map_frame_to_pixel(self.current_frame_number)
         if playhead_is_onscreen and abs(mouse_position.x() - playhead_x) < self.playhead_collider_width:
             self.is_dragging_playhead = True
+            self.compute_snap_frames()
             return  # Skip checks on timeline objects
 
         # Check for selection of timeline objects
@@ -312,16 +313,19 @@ class TimelinePanel(BasePanel):
 
     def compute_snap_frames(self):
         """Given currently selected entry, compute valid snap frames in the timeline"""
-        assert self.selected_entry_handle in ['top', 'left', 'right'], f"Timeline Panel: Got invalid entry handle when computing snap frames: {self.selected_entry_handle}"
-        assert self.selected_timeline_entry is not None, f"Timeline Panel: Timeline entry is empty when computing snap frames"
         self.handle_snap_frames = []
 
-        # 1. The start and end frames of the timeline are valid snap points
-        self.handle_snap_frames += [self.project.timeline.get_start(), self.project.timeline.get_duration()]
+        # Add selected entry snap points
+        if self.selected_timeline_entry is not None:
+            # 1. The start and end frames of the timeline are valid snap points
+            self.handle_snap_frames += [self.project.timeline.get_start(), self.project.timeline.get_duration()]
 
-        # 2. The current location of the left and right handles are a valid snap point
-        self.handle_snap_frames += [self.selected_timeline_entry.start_frame, self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.duration]
+            # 2. The current location of the left and right handles are a valid snap point
+            self.handle_snap_frames += [self.selected_timeline_entry.start_frame, self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.duration]
 
-        # 3. The true duration (if set) is a valid snap point for the right handle only
-        if self.selected_entry_handle == 'right' and self.selected_timeline_entry.timeline_object.true_duration is not None:
-            self.handle_snap_frames.append(self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.true_duration)
+            # 3. The true duration (if set) is a valid snap point for the right handle only
+            if self.selected_entry_handle == 'right' and self.selected_timeline_entry.timeline_object.true_duration is not None:
+                self.handle_snap_frames.append(self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.true_duration)
+
+        # The current frame pointer is a snap point
+        self.handle_snap_frames.append(self.current_frame_number)
