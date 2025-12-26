@@ -323,5 +323,5 @@ class TimelinePanel(BasePanel):
         self.handle_snap_frames += [self.selected_timeline_entry.start_frame, self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.duration]
 
         # 3. The true duration (if set) is a valid snap point for the right handle only
-        if self.selected_entry_handle == 'right':
+        if self.selected_entry_handle == 'right' and self.selected_timeline_entry.timeline_object.true_duration is not None:
             self.handle_snap_frames.append(self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.true_duration)
