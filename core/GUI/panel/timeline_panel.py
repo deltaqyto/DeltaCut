@@ -240,27 +240,31 @@ class TimelinePanel(BasePanel):
                 event.ignore()
                 return
 
-            # Check for collisions
-            if not self.project.timeline.check_collision(new_start, new_stop, new_channel, ignore_entries=[self.selected_timeline_entry]):
+            # Check for collisions and attempt to reposition to a safe zone
+            new_start, new_stop, new_channel = self.find_closest_safe_position(self.selected_timeline_entry.start_frame,
+                                                                               self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.duration,
+                                                                               self.selected_timeline_entry.channel,
+                                                                               new_start, new_stop, new_channel, ignore_entries=[self.selected_timeline_entry])
 
-                if self.selected_entry_handle == 'top':  # Move the entry without any resize
-                    self.project.timeline.move_entry(self.selected_timeline_entry, new_start, new_channel)
 
-                elif self.selected_entry_handle == 'left':  # Resize by adjusting start offset but not end frame
-                    current_start_offset = self.selected_timeline_entry.timeline_object.start_offset
-                    start_frame_change = new_start - self.selected_timeline_entry.start_frame
+            if self.selected_entry_handle == 'top':  # Move the entry without any resize
+                self.project.timeline.move_entry(self.selected_timeline_entry, new_start, new_channel)
 
-                    # Shorten the entry by n frames from the start
-                    accepted_start, accepted_duration = self.selected_timeline_entry.timeline_object.attempt_change_object_duration(
-                        desired_start_offset=current_start_offset + start_frame_change,
-                        desired_duration=self.selected_timeline_entry.timeline_object.duration - start_frame_change
-                    )
-                    # Compute start frame required to pin end frame
-                    self.project.timeline.move_entry(self.selected_timeline_entry, new_stop - accepted_duration, new_channel)
+            elif self.selected_entry_handle == 'left':  # Resize by adjusting start offset but not end frame
+                current_start_offset = self.selected_timeline_entry.timeline_object.start_offset
+                start_frame_change = new_start - self.selected_timeline_entry.start_frame
 
-                elif self.selected_entry_handle == 'right':  # Adjust the entry's duration only
-                    self.selected_timeline_entry.timeline_object.attempt_change_object_duration(desired_duration=new_stop - new_start)
-                    self.project.application_state.signal_timeline_content_update.emit()  # Other two paths call this implicitly via timeline.move_entry
+                # Shorten the entry by n frames from the start
+                accepted_start, accepted_duration = self.selected_timeline_entry.timeline_object.attempt_change_object_duration(
+                    desired_start_offset=current_start_offset + start_frame_change,
+                    desired_duration=self.selected_timeline_entry.timeline_object.duration - start_frame_change
+                )
+                # Compute start frame required to pin end frame
+                self.project.timeline.move_entry(self.selected_timeline_entry, new_stop - accepted_duration, new_channel)
+
+            elif self.selected_entry_handle == 'right':  # Adjust the entry's duration only
+                self.selected_timeline_entry.timeline_object.attempt_change_object_duration(desired_duration=new_stop - new_start)
+                self.project.application_state.signal_timeline_content_update.emit()  # Other two paths call this implicitly via timeline.move_entry
 
         # Pass through for frame handling
         event.ignore()
@@ -332,3 +336,40 @@ class TimelinePanel(BasePanel):
 
         # The current frame pointer is a snap point
         self.handle_snap_frames.append(self.current_frame_number)
+
+    def find_closest_safe_position(self, safe_start: int, safe_stop: int, safe_channel: int,
+                                   target_start: int, target_stop: int, target_channel: int,
+                                   ignore_entries: list[TimelineEntry] | None = None) -> tuple[int, int, int]:
+        """Find closest position to the target, from the safe location.
+        If no location is found, returns safe location.
+        Only attempts to search within the target channel. Does not search the safe channel
+        Returns start, stop, channel tuple
+        """
+        duration = target_stop - target_start
+
+        # Determine search parameter and how to compute the other value
+        if target_start != safe_start:
+            varying_target = target_start
+            varying_safe = safe_start
+
+            if duration == (safe_stop - safe_start):
+                # Top handle: stop follows start
+                compute_position = lambda test_start: (test_start, test_start + duration)
+            else:
+                # Left handle: stop locked
+                compute_position = lambda test_start: (test_start, target_stop)
+        else:
+            # Right handle: stop varies, start locked
+            varying_target = target_stop
+            varying_safe = safe_stop
+            compute_position = lambda test_stop: (target_start, test_stop)
+
+        # Search from target towards safe
+        step = 1 if varying_safe > varying_target else -1
+        for offset in range(abs(varying_target - varying_safe) + 1):
+            test_value = varying_target + offset * step
+            test_start, test_stop = compute_position(test_value)
+            if not self.project.timeline.check_collision(test_start, test_stop, target_channel, ignore_entries):
+                return test_start, test_stop, target_channel
+
+        return safe_start, safe_stop, safe_channel
