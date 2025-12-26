@@ -206,7 +206,8 @@ class TimelinePanel(BasePanel):
             new_stop = new_start + self.selected_timeline_entry.timeline_object.duration
 
             if self.selected_entry_handle == 'top':
-                new_channel = floor(event.position().y() / self.channel_height)
+                clamped_mouse_y = max(min(event.position().y(), self.height()), 0)
+                new_channel = floor(clamped_mouse_y / self.channel_height)
                 new_start = mouse_frame_position - self.selected_entry_frame_offset
                 new_stop = new_start + self.selected_timeline_entry.timeline_object.duration
 
