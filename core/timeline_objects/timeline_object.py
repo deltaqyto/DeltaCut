@@ -110,12 +110,13 @@ class TimelineObject:
 
         return self.start_offset, self.duration
 
-    def paint_ui_representation(self, painter: QPainter, rect: QRect):
+    def paint_ui_representation(self, painter: QPainter, rect: QRect, active_handle: str | None = None):
         """Render the UI element on the timeline track.
 
         Args:
             painter: QPainter instance
             rect: QRect to paint within
+            active_handle: str or None indicating where to draw highlights
         """
         # Fill with rounded rectangle background
         painter.setBrush(QColor(self.ui_color))
@@ -138,6 +139,30 @@ class TimelineObject:
         # Add padding from edges
         text_rect = rect.adjusted(4, 2, -4, -2)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, self.object_name)
+
+        # Draw hover highlights
+        if active_handle is not None:
+            painter.setPen(Qt.PenStyle.NoPen)
+
+            if active_handle == 'left':
+                # Draw left handle cap
+                handle_width = 4
+                handle_rect = QRect(rect.x(), rect.y(), handle_width, rect.height())
+                painter.setBrush(QColor(ACTIVE_THEME.on_primary))
+                painter.drawRect(handle_rect)
+
+            elif active_handle == 'right':
+                # Draw right handle cap
+                handle_width = 4
+                handle_rect = QRect(rect.x() + rect.width() - handle_width, rect.y(), handle_width, rect.height())
+                painter.setBrush(QColor(ACTIVE_THEME.on_primary))
+                painter.drawRect(handle_rect)
+
+            elif active_handle == 'top':
+                # Darken the body with semi-transparent overlay
+                painter.setBrush(QColor(0, 0, 0, 40))
+                painter.drawRoundedRect(rect, 4, 4)
+
 
     def paint_viewport_overlay(self, painter, widget):
         """Render the element in the video viewport.

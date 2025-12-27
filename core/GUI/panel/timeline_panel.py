@@ -16,12 +16,17 @@ class TimelinePanel(BasePanel):
 
     def __init__(self, parent, project: Project):
         super().__init__(parent, project)
+        self.setMouseTracking(True)
 
         self.panel_type: str = 'TimelinePanel'
         self.project: Project = project
         self.project.application_state.signal_timeline_content_update.connect(self.handle_timeline_content_update)
         self.project.application_state.signal_timeline_lock_update.connect(self.handle_timeline_lock_update)
         self.project.application_state.signal_frame_number_update.connect(self.handle_frame_number_update)
+
+        self.viewport_left: int = 0  # First visible frame
+        self.viewport_right: int = 0  # Last visible frame
+        self.current_frame_number: int = 0  # Frame that is currently rendered on screen
 
         # Mouse handling configuration
         self.channel_height: int = 40  # px height of each channel
@@ -43,16 +48,17 @@ class TimelinePanel(BasePanel):
         self.selected_entry_handle: str = ''  # top, left, right
         self.selected_entry_frame_offset: int = 0  # px of x offset from start of timeline object to mouse position
 
-        self.drag_pixels_per_frame: float = 0  # Pixels per frame, locked to when a drag starts
+        self.drag_pixels_per_frame: float = self.get_pixels_per_frame()  # Pixels per frame, locked to when a drag starts
         self.drag_viewport_left: int = 0  # First visible frame, locked to when a drag starts
 
         self.last_frame_update_time: float = 0  # Seconds since the last update to the frame number, from dragging the playhead
         self.old_stop_frame: int = 0  # Frame number of the object end. Used for left handle adjustment
         self.handle_snap_frames: list[int] = []  # List of frames which the currently selected handle can snap to
 
-        self.viewport_left: int = 0  # First visible frame
-        self.viewport_right: int = 0  # Last visible frame
-        self.current_frame_number: int = 0  # Frame that is currently rendered on screen
+        # Hover state tracking
+        self.hover_entry: TimelineEntry | None = None  # What entry is the mouse currently over
+        self.hover_handle: str | None = None  # 'left', 'right', 'body'
+        self.hover_playhead: bool = False  # Is the mouse currently over the playhead
 
         self.visible_objects: list[TimelineEntry] = []
         self.timeline_object_rects: list[QRect] = []  # Bounding boxes, matches 1:1 with self.visible objects
@@ -116,12 +122,19 @@ class TimelinePanel(BasePanel):
         assert len(self.visible_objects) == len(self.timeline_object_rects), \
             f"Timeline Panel: Visible object and rectangle lists out of sync. Entries: {len(self.visible_objects)}, rects: {len(self.timeline_object_rects)}"
         for timeline_entry, entry_rect in zip(self.visible_objects, self.timeline_object_rects):
+            # Determine hover state for this entry
+            hover_handle = self.hover_handle if timeline_entry == self.hover_entry else None
+
             # Delegate drawing to the timeline object's UI element
-            timeline_entry.timeline_object.paint_ui_representation(painter, entry_rect)
+            timeline_entry.timeline_object.paint_ui_representation(painter, entry_rect, hover_handle)
 
         playhead_is_onscreen, playhead_x = self.map_frame_to_pixel(self.current_frame_number)
         if playhead_is_onscreen:
-            painter.setPen(QColor(ACTIVE_THEME.primary))
+            # Apply hover colour if playhead is hovered
+            if self.hover_playhead:
+                painter.setPen(QColor(ACTIVE_THEME.on_primary))
+            else:
+                painter.setPen(QColor(ACTIVE_THEME.primary))
             painter.drawLine(QLineF(playhead_x, 0, playhead_x, self.height()))
 
     def resizeEvent(self, event:QResizeEvent):
@@ -137,12 +150,15 @@ class TimelinePanel(BasePanel):
         self.is_dragging_handle = False
         self.is_dragging_playhead = False
 
+        self.hover_playhead = False
+        self.hover_handle = None
+        self.hover_entry = None
+
         self.drag_pixels_per_frame = self.get_pixels_per_frame()
         self.drag_viewport_left = self.viewport_left
 
          # Check for drag on play head
-        playhead_is_onscreen, playhead_x = self.map_frame_to_pixel(self.current_frame_number)
-        if playhead_is_onscreen and abs(mouse_position.x() - playhead_x) < self.playhead_collider_width:
+        if self._determine_playhead_collision(mouse_position.x()):
             self.is_dragging_playhead = True
             self.compute_snap_frames()
             return  # Skip checks on timeline objects
@@ -152,7 +168,14 @@ class TimelinePanel(BasePanel):
             f"Timeline Panel: Visible object and rectangle lists out of sync. Entries: {len(self.visible_objects)}, rects: {len(self.timeline_object_rects)}"
         got_valid_click = False
         for entry, rect in zip(self.visible_objects, self.timeline_object_rects):
-            if not rect.contains(mouse_position):
+            # Skip collision checks if we already found a target
+            if got_valid_click:
+                entry.timeline_object.ui_is_selected = False
+                continue
+
+            # Determine collision and handle
+            collision, handle = self._determine_entry_rect_collision_handle(mouse_position, rect)
+            if not collision:
                 entry.timeline_object.ui_is_selected = False
                 continue
 
@@ -160,20 +183,21 @@ class TimelinePanel(BasePanel):
             self.selected_timeline_entry.timeline_object.ui_is_selected = True
             got_valid_click = True
 
-            if rect.x() + rect.width() - mouse_position.x() < self.object_side_handle_width:
+            if handle == 'right':
                 self.selected_entry_handle = 'right'
-            elif mouse_position.x() - rect.x() < self.object_side_handle_width:
+            elif handle == 'left':
                 self.selected_entry_handle = 'left'
                 self.old_stop_frame = self.selected_timeline_entry.start_frame + self.selected_timeline_entry.timeline_object.duration
-            else:
+            elif handle == 'top':
                 self.selected_entry_handle = 'top'
                 self.selected_entry_frame_offset = mouse_frame_position - entry.start_frame
+            else:
+                raise AssertionError(f"Timeline Panel: Got invalid handle name '{handle}' from self._determine_entry_rect_collision_handle")
 
             self.project.application_state.signal_timeline_content_update.emit()  # Inform other timeline panels that the selection status changed
             self.compute_snap_frames()
-            break
-        if not got_valid_click:
-            self.update()
+
+        self.update()
         event.ignore()
 
     def mouseMoveEvent(self, event:QMouseEvent):
@@ -266,6 +290,37 @@ class TimelinePanel(BasePanel):
                 self.selected_timeline_entry.timeline_object.attempt_change_object_duration(desired_duration=new_stop - new_start)
                 self.project.application_state.signal_timeline_content_update.emit()  # Other two paths call this implicitly via timeline.move_entry
 
+            event.ignore()
+            return
+
+        # No drag actions are happening. Update hover states
+        last_hover_playhead = self.hover_playhead
+        self.hover_playhead = False
+        if self._determine_playhead_collision(floor(event.position().x())):
+            self.hover_playhead = True
+            self.hover_entry = None
+            self.hover_handle = None
+            self.compute_snap_frames()
+        if last_hover_playhead != self.hover_playhead:
+            self.update()
+
+        # If the playhead is not hovered, check against timeline entries
+        if not self.hover_playhead:
+            mouse_position = QPoint(floor(event.position().x()), floor(event.position().y()))
+            last_hover_entry = self.hover_entry
+            last_hover_handle = self.hover_handle
+            self.hover_entry = None
+            self.hover_handle = None
+            for entry, rect in zip(self.visible_objects, self.timeline_object_rects):
+                collision, handle = self._determine_entry_rect_collision_handle(mouse_position, rect)
+                if not collision:
+                    continue
+                self.hover_entry = entry
+                self.hover_handle = handle
+                break
+            if last_hover_entry != self.hover_entry or last_hover_handle != self.hover_handle:
+                self.update()
+
         # Pass through for frame handling
         event.ignore()
 
@@ -291,6 +346,7 @@ class TimelinePanel(BasePanel):
         self.is_dragging_handle = False
         self.is_dragging_playhead = False
         self.selected_entry_handle = ''
+        self.handle_snap_frames = []
 
     def map_frame_to_pixel(self, frame_number, pixels_per_frame=None) -> tuple[bool, int]:
         """Compute the pixel offset of a timeline frame on the panel's x axis
@@ -373,3 +429,23 @@ class TimelinePanel(BasePanel):
                 return test_start, test_stop, target_channel
 
         return safe_start, safe_stop, safe_channel
+
+    def _determine_playhead_collision(self, mouse_x: int):
+        """Determine if the mouse is in range of the playhead"""
+        playhead_is_onscreen, playhead_x = self.map_frame_to_pixel(self.current_frame_number)
+        return playhead_is_onscreen and abs(mouse_x - playhead_x) < self.playhead_collider_width
+
+    def _determine_entry_rect_collision_handle(self, mouse_position: QPoint, rect) -> tuple[bool, str]:
+        """Determine if the provided entry rectangle is collided with,
+        and if so, which handle is selected."""
+        if not rect.contains(mouse_position):
+            return False, ''  # No collision, no handle
+
+        if rect.x() + rect.width() - mouse_position.x() < self.object_side_handle_width:
+            handle = 'right'
+        elif mouse_position.x() - rect.x() < self.object_side_handle_width:
+            handle = 'left'
+        else:
+            handle = 'top'
+
+        return True, handle
