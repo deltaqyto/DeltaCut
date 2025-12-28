@@ -34,6 +34,7 @@ class ViewportPanel(BasePanel):
     def paintEvent(self, event: QPaintEvent):
         """Draw the frame. Keep aspect ratio"""
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Fill entire widget with background colour
         painter.fillRect(QRect(0, 0, self.width(), self.height()), QColor(ACTIVE_THEME.background))
