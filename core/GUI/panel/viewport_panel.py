@@ -15,6 +15,7 @@ class ViewportPanel(BasePanel):
         self.draw_transparency_indicator = False  # TODO make this an accessible setting
 
         self.project.application_state.signal_frame_buffer_update.connect(self.handle_frame_update)
+        self.project.application_state.signal_entry_selection_update.connect(self.handle_entry_selection_update)
 
         self.current_frame = self.project.application_state.rendered_frame.visual_frame
 
@@ -29,6 +30,11 @@ class ViewportPanel(BasePanel):
     def handle_frame_update(self):
         """A new rendered frame is available"""
         self.current_frame = self.project.application_state.rendered_frame.visual_frame
+        self.update()
+
+    @pyqtSlot()
+    def handle_entry_selection_update(self):
+        """Called when the selection status of the entries change"""
         self.update()
 
     def paintEvent(self, event: QPaintEvent):
