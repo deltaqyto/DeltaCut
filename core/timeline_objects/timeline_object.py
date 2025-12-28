@@ -1,4 +1,6 @@
-from PyQt6.QtCore import QRect, Qt, QPointF
+from math import floor
+
+from PyQt6.QtCore import QRect, Qt, QPointF, QPoint
 from PyQt6.QtGui import QImage, QColor, QFont, QPainter, QPen, QTransform, QBrush, QPolygonF
 
 from core.GUI.themes import ACTIVE_THEME
@@ -275,13 +277,17 @@ class TimelineObject:
         )
         painter.drawEllipse(rotation_center_widget, self.rotation_center_handle_size, self.rotation_center_handle_size)
 
-    def get_viewport_bounding_rect(self):
-        """Return the bounding rectangle in normalised viewport coordinates.
+    def check_viewport_mouse_collision(self, mouse_pos: QPointF) -> bool:
+        """Determines if the mouse clicked on the object"""
+        if self.viewport_overlay_bounding_rect is None or self.viewport_transform is None:
+            return False
 
-        Returns:
-            QRectF in normalised space (width=1, height=1/aspect_ratio)
-        """
-        raise NotImplementedError
+        inverted_transform, invertible = self.viewport_transform.inverted()
+        if not invertible:
+            return False
+
+        local_pos = inverted_transform.map(mouse_pos)
+        return self.viewport_overlay_bounding_rect.contains(QPoint(floor(local_pos.x()), floor(local_pos.y())))
 
     def set_application_state(self, application_state: ApplicationState):
         self.application_state = application_state
