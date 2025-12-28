@@ -89,6 +89,7 @@ class TimelinePanel(BasePanel):
     @pyqtSlot()
     def handle_entry_selection_update(self):
         """Called when the selection status of the entries change"""
+        self.selected_timeline_entry = self.project.application_state.selected_entry
         self.update()
 
     def update_timeline_object_rects(self):
@@ -207,6 +208,7 @@ class TimelinePanel(BasePanel):
                 raise AssertionError(f"Timeline Panel: Got invalid handle name '{handle}' from self._determine_entry_rect_collision_handle")
 
         if selection_has_changed:
+            self.project.application_state.selected_entry = self.selected_timeline_entry
             self.project.application_state.signal_entry_selection_update.emit()
             self.compute_snap_frames()
 

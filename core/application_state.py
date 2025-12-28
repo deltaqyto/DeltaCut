@@ -1,3 +1,7 @@
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from core.timeline import TimelineEntry
+
 from dataclasses import dataclass, field
 
 from PyQt6.QtCore import pyqtSignal, QObject
@@ -152,7 +156,8 @@ class ApplicationState(QObject):
         self.resource_manager: ResourceManager = ResourceManager()
 
         self.rendered_frame: FrameBuffer = FrameBuffer(*self.project_settings.playback_codec.frame_dimensions.get_value(), QColor(0, 0, 0, 0))
-        self.rendered_entries: list = []  # List of timeline entries that got rendered onto the frame. Sorted by order of rendering (last index rendered last)
+        self.rendered_entries: list[TimelineEntry] = []  # List of timeline entries that got rendered onto the frame. Sorted by order of rendering (last index rendered last)
+        self.selected_entry: TimelineEntry | None = None  # Selected timeline entry. Timeline entry or None
 
         self.current_playback_frame: int = 0  # The frame that is currently visible on the viewport
         self.is_timeline_locked: bool = False  # The timeline is read-only when True
