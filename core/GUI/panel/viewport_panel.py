@@ -1,5 +1,5 @@
 from PyQt6.QtCore import QRect, pyqtSlot
-from PyQt6.QtGui import QPaintEvent, QPainter, QColor
+from PyQt6.QtGui import QPaintEvent, QPainter, QColor, QTransform
 
 from core.GUI.panel.base_panel import BasePanel
 
@@ -80,6 +80,20 @@ class ViewportPanel(BasePanel):
 
         # Draw the frame on top
         painter.drawImage(target_rect, self.current_frame)
+
+        # Determine transform from true frame to viewport frame
+        visual_frame_width = self.project.application_state.rendered_frame.visual_frame.width()
+        visual_frame_height = self.project.application_state.rendered_frame.visual_frame.height()
+        scale_x = target_width / visual_frame_width
+        scale_y = target_height / visual_frame_height
+
+        frame_to_widget = QTransform(scale_x,  0,        0,
+                                     0,        scale_y,  0,
+                                     x_offset, y_offset, 1)
+
+        # Draw selected entry handles
+        for entry in self.project.application_state.rendered_entries:
+            entry.timeline_object.paint_viewport_overlay(painter, frame_to_widget)
 
     def _draw_transparency_checkerboard(self, x_offset, y_offset, target_width, target_height, painter):
         """

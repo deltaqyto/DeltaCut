@@ -1,5 +1,5 @@
-from PyQt6.QtGui import QImage, QPainter
-from PyQt6.QtCore import QRectF
+from PyQt6.QtGui import QImage, QPainter, QTransform
+from PyQt6.QtCore import QRectF, QRect
 
 from core.GUI.themes import ACTIVE_THEME
 from core.application_state import ApplicationState
@@ -49,9 +49,37 @@ class ImageMediaTimelineObject(TimelineObject):
         if object_resource is None:
             self.read_head = None
             self.object_resource = None
+            self.viewport_overlay_bounding_rect = None
+            self.viewport_transform = None
         else:
             self.object_resource = object_resource
             self.read_head = object_resource.get_video_read_head()
+
+            # Infer bounding rect from image dimensions
+            rgba_data = self.read_head.read()
+            height, width = rgba_data.shape[:2]
+
+            if self.viewport_overlay_bounding_rect is None:
+                self.viewport_overlay_bounding_rect = QRect(0, 0, width, height)
+            if self.viewport_transform is None:
+                # Calculate scaling to fit while preserving aspect ratio
+                frame_width = self.application_state.rendered_frame.visual_frame.width()
+                frame_height = self.application_state.rendered_frame.visual_frame.height()
+
+                width_scale = frame_width / width
+                height_scale = frame_height / height
+                scale = min(width_scale, height_scale)
+
+                scaled_width = width * scale
+                scaled_height = height * scale
+
+                # Centre the image
+                x_offset = (frame_width - scaled_width) / 2
+                y_offset = (frame_height - scaled_height) / 2
+
+                self.viewport_transform = QTransform()
+                self.viewport_transform.translate(x_offset, y_offset)
+                self.viewport_transform.scale(scale, scale)
 
     def render_on_frame_buffer(self, frame_number, frame_buffer):
         """Update viewport element for the given frame.
@@ -74,27 +102,11 @@ class ImageMediaTimelineObject(TimelineObject):
         bytes_per_line = width * 4
         qimage = QImage(rgba_data.data, width, height, bytes_per_line, QImage.Format.Format_RGBA8888)
 
-        # Calculate scaling to fit while preserving aspect ratio
-        frame_width = frame_buffer.width()
-        frame_height = frame_buffer.height()
-
-        width_scale = frame_width / width
-        height_scale = frame_height / height
-        scale = min(width_scale, height_scale)
-
-        scaled_width = width * scale
-        scaled_height = height * scale
-
-        # Centre the image
-        x_offset = (frame_width - scaled_width) / 2
-        y_offset = (frame_height - scaled_height) / 2
-
-        # Draw scaled image onto frame buffer
         painter = QPainter(frame_buffer)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        target_rect = QRectF(x_offset, y_offset, scaled_width, scaled_height)
+        painter.setTransform(self.viewport_transform)
         source_rect = QRectF(0, 0, width, height)
-        painter.drawImage(target_rect, qimage, source_rect)
+        painter.drawImage(source_rect, qimage, source_rect)
         painter.end()
 
     def serialise_object(self):

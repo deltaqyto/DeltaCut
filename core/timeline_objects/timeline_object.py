@@ -1,5 +1,5 @@
-from PyQt6.QtCore import QRect, Qt
-from PyQt6.QtGui import QImage, QColor, QFont, QPainter, QPen
+from PyQt6.QtCore import QRect, Qt, QPointF
+from PyQt6.QtGui import QImage, QColor, QFont, QPainter, QPen, QTransform, QBrush, QPolygonF
 
 from core.GUI.themes import ACTIVE_THEME
 from core.application_state import ApplicationState
@@ -37,6 +37,18 @@ class TimelineObject:
         self.ui_text_color = ACTIVE_THEME.on_error
         self.ui_is_selected = False
 
+        self.handle_outline = Qt.GlobalColor.gray
+        self.handle_fill = Qt.GlobalColor.white
+        self.bounding_box_outline = Qt.GlobalColor.white
+
+        self.rotation_handle_length = 30  # px distance from bounding box to rotation handle
+        self.rotation_center_handle_size = 8  # px diameter of the rotation center handle
+
+        # None is used to indicate that it should be filled with default values. Set by children as appropriate.
+        self.viewport_overlay_bounding_rect: QRect | None = None  # Bounding box of the object. Only set width and height, offset is set in the transform
+        self.viewport_transform: QTransform | None = None  # Transform applied to object when rendered to viewport
+        self.rotation_center: QPointF | None = None  # Custom center of rotation. Used only when actively rotating the object. Will be set to reasonable value if none in paint_viewport_overlay
+
         if serial_representation is not None:
             self.deserialise_object(serial_representation)
 
@@ -56,6 +68,7 @@ class TimelineObject:
             return
 
         # Subclasses implement viewport element updates here
+        # Make sure to use the viewport_transform here
         pass
 
     def get_audio_samples(self, start_sample, sample_count):
@@ -81,7 +94,16 @@ class TimelineObject:
     def serialise_object(self):
         """Generate a dictionary serialisation of the object.
         The serialised format is guaranteed to store the type of the object itself, and is guaranteed to match an entry in the type registry"""
-        return {'object_type': 'BaseTimelineObject', 'duration': self.duration, 'enabled': self.enabled, 'name': self.object_name, 'start_offset': self.start_offset}
+        data = {'object_type': 'BaseTimelineObject', 'duration': self.duration, 'enabled': self.enabled, 'name': self.object_name, 'start_offset': self.start_offset}
+        if self.viewport_transform is not None:
+            data['viewport_transform'] = [self.viewport_transform.m11(), self.viewport_transform.m12(), self.viewport_transform.m13(),
+                                       self.viewport_transform.m21(), self.viewport_transform.m22(), self.viewport_transform.m23(),
+                                       self.viewport_transform.m31(), self.viewport_transform.m32(), self.viewport_transform.m33()]
+        if self.rotation_center is not None:
+            data['rotation_center'] = [self.rotation_center.x(), self.rotation_center.y()]
+        if self.viewport_overlay_bounding_rect is not None:
+            data['viewport_box'] = [self.viewport_overlay_bounding_rect.width(), self.viewport_overlay_bounding_rect.height()]
+        return data
 
     def deserialise_object(self, serial_representation):
         """Reverse a dictionary serialisation into the object.
@@ -90,6 +112,13 @@ class TimelineObject:
         self.start_offset = serial_representation.get('start_offset', 0)
         self.enabled = serial_representation.get('enabled', True)
         self.object_name = serial_representation.get('name', 'Error Object')
+
+        if 'viewport_transform' in serial_representation:
+            self.viewport_transform = QTransform(*serial_representation['viewport_transform'])
+        if 'rotation_center' in serial_representation:
+            self.rotation_center = QPointF(*serial_representation['rotation_center'])
+        if 'viewport_box' in serial_representation:
+            self.viewport_overlay_bounding_rect = QRect(0, 0, *serial_representation['viewport_box'])
 
     def attempt_change_object_duration(self, desired_start_offset: int=None, desired_duration: int=None):
         """Try to change the duration and how many frames to skip at the start.
@@ -163,15 +192,88 @@ class TimelineObject:
                 painter.setBrush(QColor(0, 0, 0, 40))
                 painter.drawRoundedRect(rect, 4, 4)
 
-
-    def paint_viewport_overlay(self, painter, widget):
+    def paint_viewport_overlay(self, painter: QPainter, frame_to_widget: QTransform):
         """Render the element in the video viewport.
 
         Args:
             painter: QPainter instance
-            widget: QWidget being painted on
+            frame_to_widget: QTransform mapping from canonical frame space to widget space
         """
-        raise NotImplementedError
+        # If not visible on viewport, do not render overlays
+        if not self.can_play_video:
+            return
+        # If there is no bounding rectangle or transform, do not render
+        if self.viewport_overlay_bounding_rect is None or self.viewport_transform is None:
+            return
+        if not self.ui_is_selected:
+            return
+
+        # Define the rotation center as the center of the object
+        if self.rotation_center is None:
+            self.rotation_center = QPointF(self.viewport_overlay_bounding_rect.width() / 2, self.viewport_overlay_bounding_rect.height() / 2)
+
+        # Get corner points from bounding rect (origin at 0,0 since offset is in transform)
+        rect = self.viewport_overlay_bounding_rect
+        corners = [
+            QPointF(0, 0),
+            QPointF(rect.width(), 0),
+            QPointF(rect.width(), rect.height()),
+            QPointF(0, rect.height())
+        ]
+
+        # Combine transforms: object space -> frame space -> widget space
+        complete_transform = self.viewport_transform * frame_to_widget
+
+        # Map corners to widget space
+        top_left = complete_transform.map(corners[0])
+        top_right = complete_transform.map(corners[1])
+        bottom_right = complete_transform.map(corners[2])
+        bottom_left = complete_transform.map(corners[3])
+
+        # Calculate midpoint positions
+        top_mid = QPointF((top_left.x() + top_right.x()) / 2, (top_left.y() + top_right.y()) / 2)
+        right_mid = QPointF((top_right.x() + bottom_right.x()) / 2, (top_right.y() + bottom_right.y()) / 2)
+        bottom_mid = QPointF((bottom_right.x() + bottom_left.x()) / 2, (bottom_right.y() + bottom_left.y()) / 2)
+        left_mid = QPointF((bottom_left.x() + top_left.x()) / 2, (bottom_left.y() + top_left.y()) / 2)
+
+        # Calculate rotation handle position
+        edge_vector = QPointF(top_right.x() - top_left.x(), top_right.y() - top_left.y())
+        edge_length = (edge_vector.x() ** 2 + edge_vector.y() ** 2) ** 0.5
+        if edge_length > 0:
+            edge_vector = QPointF(edge_vector.x() / edge_length, edge_vector.y() / edge_length)
+        normal_vector = QPointF(-edge_vector.y(), edge_vector.x())
+        rotate_handle = QPointF(top_mid.x() + normal_vector.x() * self.rotation_handle_length, top_mid.y() + normal_vector.y() * self.rotation_handle_length)
+
+        # Draw bounding box
+        painter.setPen(QPen(self.bounding_box_outline, 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        polygon = QPolygonF([top_left, top_right, bottom_right, bottom_left])
+        painter.drawPolygon(polygon)
+
+        # Draw line from top midpoint to rotation handle
+        painter.drawLine(top_mid, rotate_handle)
+
+        # Draw handles
+        painter.setPen(QPen(self.handle_outline, 1))
+        painter.setBrush(QBrush(self.handle_fill))
+        circle_radius = 3
+        for handle in [top_left, top_right, bottom_right, bottom_left, top_mid, right_mid, bottom_mid, left_mid, rotate_handle]:
+            painter.drawEllipse(handle, circle_radius, circle_radius)
+
+        # Draw the rotation center handle
+        rotation_center_widget = complete_transform.map(self.rotation_center)
+        painter.setPen(QPen(self.handle_fill, 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        painter.drawLine(
+            QPointF(rotation_center_widget.x() - self.rotation_center_handle_size, rotation_center_widget.y()),
+            QPointF(rotation_center_widget.x() + self.rotation_center_handle_size, rotation_center_widget.y())
+        )
+        painter.drawLine(
+            QPointF(rotation_center_widget.x(), rotation_center_widget.y() - self.rotation_center_handle_size),
+            QPointF(rotation_center_widget.x(), rotation_center_widget.y() + self.rotation_center_handle_size)
+        )
+        painter.drawEllipse(rotation_center_widget, self.rotation_center_handle_size, self.rotation_center_handle_size)
 
     def get_viewport_bounding_rect(self):
         """Return the bounding rectangle in normalised viewport coordinates.
