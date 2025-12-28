@@ -207,6 +207,11 @@ class TimelinePanel(BasePanel):
             else:
                 raise AssertionError(f"Timeline Panel: Got invalid handle name '{handle}' from self._determine_entry_rect_collision_handle")
 
+        if not got_valid_click:
+            if self.selected_timeline_entry is not None:
+                self.selected_timeline_entry = None
+                selection_has_changed = True
+
         if selection_has_changed:
             self.project.application_state.selected_entry = self.selected_timeline_entry
             self.project.application_state.signal_entry_selection_update.emit()
