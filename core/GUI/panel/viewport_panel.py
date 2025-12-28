@@ -26,6 +26,8 @@ class ViewportPanel(BasePanel):
         self.transparency_background = QColor("#000000")
         self.checkerboard_size = 16  # px
 
+        self.padding = 32  # px of padding around the frame
+
     @pyqtSlot()
     def handle_frame_update(self):
         """A new rendered frame is available"""
@@ -58,11 +60,11 @@ class ViewportPanel(BasePanel):
         # Determine scaling based on limiting dimension
         if widget_aspect > frame_aspect:
             # Widget is wider, height is limiting
-            target_height = self.height()
+            target_height = max(1, self.height() - self.padding)
             target_width = int(target_height * frame_aspect)
         else:
             # Widget is taller, width is limiting
-            target_width = self.width()
+            target_width = max(1, self.width() - self.padding)
             target_height = int(target_width / frame_aspect)
 
         # Centre the frame
