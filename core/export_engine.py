@@ -494,6 +494,7 @@ class ExportEngine(QObject):
         self.timeline = timeline
 
         self.viewport_update_rate = 4  # Viewport update rate hz
+        self.frame_at_start = 0  # Frame that was active before export began
 
         self.worker: ExportWorker | None = None
         self.worker_thread = None
@@ -533,6 +534,8 @@ class ExportEngine(QObject):
         frame_rate = project.export_codec.frame_rate.get_value()
         assert frame_rate > 0, "Frame rate must be positive"
 
+        self.frame_at_start = self.application_state.current_playback_frame
+
         # Create worker and thread
         self.worker = ExportWorker(self.application_state, self.timeline)
         self.worker.start_frame = start_frame
@@ -564,17 +567,16 @@ class ExportEngine(QObject):
             self.worker_thread.quit()
             self.worker_thread.wait()
 
+        self.application_state.rendered_frame.visual_frame = self.timeline.render_frame(self.frame_at_start)
+        self.application_state.current_playback_frame = self.frame_at_start
+        self.application_state.signal_frame_number_update.emit()
+        self.application_state.signal_frame_buffer_update.emit()
+
         self.is_exporting = False
 
     def _on_export_finished(self):
         """Handle export completion"""
-        self.update_timer.stop()
-
-        if self.worker_thread:
-            self.worker_thread.quit()
-            self.worker_thread.wait()
-
-        self.is_exporting = False
+        self.stop()
 
     def _update_display(self):
         """Update display with latest rendered frame"""

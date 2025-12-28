@@ -142,7 +142,12 @@ class PlaybackEngine(QObject):
         self.audio_sink.stop()
         self.video_timer.stop()
 
+        self._update_video()  # Update video to last frame
+
         # Unlock timeline
+        self.application_state.current_playback_frame = self.start_frame
+        self.application_state.signal_frame_number_update.emit()
+
         self.application_state.is_timeline_locked = False
         self.application_state.signal_timeline_lock_update.emit()
 
