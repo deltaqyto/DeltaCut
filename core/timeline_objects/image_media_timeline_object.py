@@ -109,4 +109,4 @@ class ImageMediaTimelineObject(TimelineObject):
 
     def deserialise_object(self, serial_representation):
         super().deserialise_object(serial_representation)
-        self.object_resource = self.application_state.resource_manager.get_resource_by_resource_id(serial_representation.get('resource_id')) if 'resource_id' in serial_representation else None
+        self.set_object_resource(self.application_state.resource_manager.get_resource_by_resource_id(serial_representation.get('resource_id')) if 'resource_id' in serial_representation else None)
