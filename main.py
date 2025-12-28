@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication
 
@@ -18,16 +19,16 @@ def main():
     application_state = ApplicationState()
 
     # Temporarily hardcode the default layout
-    audio_resource_1 = AudioResource(r"testing_resources\test01_20s.wav")
-    image_resource_1 = ImageResource(r"testing_resources\river_rock.jpg")
-    image_resource_2 = ImageResource(r"testing_resources\cheetahs_ahmed_galal.jpg")
+    audio_resource_1 = AudioResource(str(Path("testing_resources") / "test01_20s.wav"))
+    image_resource_1 = ImageResource(str(Path(r"testing_resources") / "river_rock.jpg"))
+    image_resource_2 = ImageResource(str(Path(r"testing_resources") / "cheetahs_ahmed_galal.jpg"))
 
     application_state.resource_manager.add_resource(audio_resource_1)
     application_state.resource_manager.add_resource(image_resource_1)
     application_state.resource_manager.add_resource(image_resource_2)
 
     # Temporarily hardcode export settings
-    application_state.project_settings.export_container.file_path = 'debug\\output'
+    application_state.project_settings.export_container.file_path = str(Path("debug") / "output")
     application_state.project_settings.export_container.export_audio.set_value(False)
     application_state.project_settings.export_codec.audio_codec.set_value('mp3')
 
