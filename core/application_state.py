@@ -152,6 +152,7 @@ class ApplicationState(QObject):
         self.resource_manager: ResourceManager = ResourceManager()
 
         self.rendered_frame: FrameBuffer = FrameBuffer(*self.project_settings.playback_codec.frame_dimensions.get_value(), QColor(0, 0, 0, 0))
+        self.rendered_entries: list = []  # List of timeline entries that got rendered onto the frame. Sorted by order of rendering (last index rendered last)
 
         self.current_playback_frame: int = 0  # The frame that is currently visible on the viewport
         self.is_timeline_locked: bool = False  # The timeline is read-only when True

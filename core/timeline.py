@@ -187,9 +187,11 @@ class Timeline:
 
         # Sort by channel in ascending order
         visible_entries.sort(key=lambda x: x[0])
+        self.application_state.rendered_entries = []
 
         # Second pass: render entries in channel order
         for channel, relative_frame, entry in visible_entries:
-                entry.timeline_object.render_on_frame_buffer(relative_frame, frame_buffer)
+            entry.timeline_object.render_on_frame_buffer(relative_frame, frame_buffer)
+            self.application_state.rendered_entries.append(entry)
 
         return frame_buffer
