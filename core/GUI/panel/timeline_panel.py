@@ -241,7 +241,7 @@ class TimelinePanel(BasePanel):
                 self.is_dragging_handle = True
                 self.is_dragging_handle_lock = False
 
-        if self.is_dragging_handle:
+        if self.is_dragging_handle and self.selected_timeline_entry is not None:
             # Do we have a handle active? Work out the new channel, start and end frames of the object
 
             new_channel = self.selected_timeline_entry.channel
