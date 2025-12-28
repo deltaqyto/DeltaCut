@@ -142,6 +142,8 @@ class ApplicationState(QObject):
     signal_timeline_content_update: pyqtSignal = pyqtSignal()  # Triggered when the timeline contents have been altered.
     signal_timeline_lock_update: pyqtSignal = pyqtSignal()  # Triggered when the timeline has been locked or unlocked.
 
+    signal_entry_selection_update: pyqtSignal = pyqtSignal()  # Triggered when the selected entry has changed.
+
     def __init__(self):
         super().__init__(parent=None)
 

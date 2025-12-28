@@ -23,6 +23,7 @@ class TimelinePanel(BasePanel):
         self.project.application_state.signal_timeline_content_update.connect(self.handle_timeline_content_update)
         self.project.application_state.signal_timeline_lock_update.connect(self.handle_timeline_lock_update)
         self.project.application_state.signal_frame_number_update.connect(self.handle_frame_number_update)
+        self.project.application_state.signal_entry_selection_update.connect(self.handle_entry_selection_update)
 
         self.viewport_left: int = 0  # First visible frame
         self.viewport_right: int = 0  # Last visible frame
@@ -83,6 +84,11 @@ class TimelinePanel(BasePanel):
     def handle_frame_number_update(self):
         """Called when the currently visible frame number has been changed"""
         self.current_frame_number = self.project.application_state.current_playback_frame
+        self.update()
+
+    @pyqtSlot()
+    def handle_entry_selection_update(self):
+        """Called when the selection status of the entries change"""
         self.update()
 
     def update_timeline_object_rects(self):
@@ -161,25 +167,31 @@ class TimelinePanel(BasePanel):
         if self._determine_playhead_collision(mouse_position.x()):
             self.is_dragging_playhead = True
             self.compute_snap_frames()
+            self.update()
             return  # Skip checks on timeline objects
 
         # Check for selection of timeline objects
         assert len(self.visible_objects) == len(self.timeline_object_rects), \
             f"Timeline Panel: Visible object and rectangle lists out of sync. Entries: {len(self.visible_objects)}, rects: {len(self.timeline_object_rects)}"
+
         got_valid_click = False
+        selection_has_changed = False
         for entry, rect in zip(self.visible_objects, self.timeline_object_rects):
             # Skip collision checks if we already found a target
             if got_valid_click:
+                selection_has_changed = selection_has_changed or entry.timeline_object.ui_is_selected
                 entry.timeline_object.ui_is_selected = False
                 continue
 
             # Determine collision and handle
             collision, handle = self._determine_entry_rect_collision_handle(mouse_position, rect)
             if not collision:
+                selection_has_changed = selection_has_changed or entry.timeline_object.ui_is_selected
                 entry.timeline_object.ui_is_selected = False
                 continue
 
             self.selected_timeline_entry = entry
+            selection_has_changed = selection_has_changed or not entry.timeline_object.ui_is_selected
             self.selected_timeline_entry.timeline_object.ui_is_selected = True
             got_valid_click = True
 
@@ -194,10 +206,10 @@ class TimelinePanel(BasePanel):
             else:
                 raise AssertionError(f"Timeline Panel: Got invalid handle name '{handle}' from self._determine_entry_rect_collision_handle")
 
-            self.project.application_state.signal_timeline_content_update.emit()  # Inform other timeline panels that the selection status changed
+        if selection_has_changed:
+            self.project.application_state.signal_entry_selection_update.emit()
             self.compute_snap_frames()
 
-        self.update()
         event.ignore()
 
     def mouseMoveEvent(self, event:QMouseEvent):
