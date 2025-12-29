@@ -329,6 +329,11 @@ class TimelineObject:
                 if distance < handle_size_fb:
                     return True
 
+            rotation_center = self.viewport_transform.map(self.rotation_center)
+            distance = ((rotation_center.x() - mouse_pos.x()) ** 2 + (rotation_center.y() - mouse_pos.y()) ** 2) ** 0.5
+            if distance < self.rotation_center_handle_size / scale:
+                return True
+
         return False
 
     def set_application_state(self, application_state: ApplicationState):
