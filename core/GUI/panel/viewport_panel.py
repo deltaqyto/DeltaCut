@@ -1,5 +1,5 @@
 from PyQt6.QtCore import QRect, pyqtSlot
-from PyQt6.QtGui import QPaintEvent, QPainter, QColor, QTransform, QResizeEvent
+from PyQt6.QtGui import QPaintEvent, QPainter, QColor, QTransform, QResizeEvent, QMouseEvent
 
 from core.GUI.panel.base_panel import BasePanel
 
@@ -12,6 +12,8 @@ class ViewportPanel(BasePanel):
 
     def __init__(self, parent, project: Project):
         super().__init__(parent, project)
+        self.setMouseTracking(True)
+
         self.draw_transparency_indicator = False  # TODO make this an accessible setting
 
         self.project.application_state.signal_frame_buffer_update.connect(self.handle_frame_update)
@@ -102,6 +104,82 @@ class ViewportPanel(BasePanel):
             painter.fillRect(x_offset + (col_count + 1) * checker_size, start_y, target_width - col_count * checker_size, target_height - row * checker_size, self.checkerboard_dark)
         else:
             painter.fillRect(x_offset + (col_count + 1) * checker_size, start_y, target_width - col_count * checker_size, target_height - row * checker_size, self.checkerboard_light)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        """Work out which entry should be activated and pass it forward"""
+        inverted, invertible = self.frame_to_widget.inverted()
+        if not invertible:
+            event.ignore()
+            return
+
+        frame_mouse_pos = inverted.map(event.position())
+
+        # Find which entry was clicked, giving priority to currently selected entry
+        clicked_entry = None
+        selected_entry = self.project.application_state.selected_entry
+
+        if selected_entry is not None and selected_entry.timeline_object.check_viewport_mouse_collision(frame_mouse_pos, self.frame_to_widget):
+            clicked_entry = selected_entry
+        else:
+            for entry in self.project.application_state.rendered_entries[::-1]:
+                if entry.timeline_object.check_viewport_mouse_collision(frame_mouse_pos, self.frame_to_widget):
+                    clicked_entry = entry
+                    break
+
+        # Update selections
+        changed_selection = False
+        for entry in self.project.application_state.rendered_entries:
+            should_be_selected = (entry == clicked_entry)
+            if entry.timeline_object.ui_is_selected != should_be_selected:
+                changed_selection = True
+                entry.timeline_object.ui_is_selected = should_be_selected
+
+        if clicked_entry != selected_entry:
+            changed_selection = True
+            self.project.application_state.selected_entry = clicked_entry
+
+        if changed_selection:
+            self.project.application_state.signal_entry_selection_update.emit()
+
+        if clicked_entry is not None:
+            if clicked_entry.timeline_object.viewport_mouse_press(frame_mouse_pos, self.frame_to_widget):
+                self.update()
+
+        event.ignore()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """Pass to selected entry"""
+        inverted, invertible = self.frame_to_widget.inverted()
+        if not invertible:
+            event.ignore()
+            return
+
+        frame_mouse_pos = inverted.map(event.position())
+        if self.project.application_state.selected_entry is not None:
+            selected_entry = self.project.application_state.selected_entry
+            if selected_entry.timeline_object.viewport_mouse_release(frame_mouse_pos):
+                self.update()
+
+        event.ignore()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        """Pass to selected entry"""
+        inverted, invertible = self.frame_to_widget.inverted()
+        if not invertible:
+            event.ignore()
+            return
+
+        frame_mouse_pos = inverted.map(event.position())
+        if self.project.application_state.selected_entry is not None:
+            selected_entry = self.project.application_state.selected_entry
+            update, re_render = selected_entry.timeline_object.viewport_mouse_move(frame_mouse_pos, self.frame_to_widget)
+            if re_render:
+                self.project.application_state.rendered_frame.visual_frame = self.project.timeline.render_frame(self.project.application_state.current_playback_frame)
+                self.project.application_state.signal_frame_buffer_update.emit()
+            if update:
+                self.update()
+
+        event.ignore()
 
     def resizeEvent(self, event: QResizeEvent):
         """Recalculate frame transform whenever widget is resized"""

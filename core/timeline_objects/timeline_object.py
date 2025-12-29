@@ -1,3 +1,4 @@
+import math
 from math import floor
 
 from PyQt6.QtCore import QRect, Qt, QPointF, QPoint
@@ -43,8 +44,24 @@ class TimelineObject:
         self.handle_fill = Qt.GlobalColor.white
         self.bounding_box_outline = Qt.GlobalColor.white
 
+        self.handle_size = 5  # px radius of the transform handles
         self.rotation_handle_length = 30  # px distance from bounding box to rotation handle
-        self.rotation_center_handle_size = 8  # px diameter of the rotation center handle
+        self.rotation_center_handle_size = 8  # px radius of the rotation center handle
+
+        # Mouse state variables
+        self.handle_locations: list[QPointF] = [QPointF(), QPointF(), QPointF(), QPointF(),  # top left, top right, bottom right, bottom left
+                                                QPointF(), QPointF(), QPointF(), QPointF(),  # mid top, right, bottom, left
+                                                QPointF()]  # Rotation handle
+        self.selected_handle: int | None = None  # Index into the handle location array
+        self.handle_start_position: QPointF | None = None  # Location from which the currently selected handle started
+        self.drag_start_transform: QTransform = QTransform()  # Transform when the drag event started
+        self.drag_anchor: int = 0  # Which handle is considered fixed in place
+        self.drag_axis: str = ""  # Which way to drag the handle. Contents depend on drag type
+        self.is_dragging_corner: bool = False
+        self.is_dragging_edge: bool = False
+        self.is_dragging_rotate: bool = False
+        self.is_dragging_center: bool = False
+        self.is_dragging_transform: bool = False
 
         # None is used to indicate that it should be filled with default values. Set by children as appropriate.
         self.viewport_overlay_bounding_rect: QRect | None = None  # Bounding box of the object. Only set width and height, offset is set in the transform
@@ -223,28 +240,30 @@ class TimelineObject:
             QPointF(0, rect.height())
         ]
 
+        # Calculate midpoint positions in object space
+        top_mid = QPointF(rect.width() / 2, 0)
+        right_mid = QPointF(rect.width(), rect.height() / 2)
+        bottom_mid = QPointF(rect.width() / 2, rect.height())
+        left_mid = QPointF(0, rect.height() / 2)
+
+        # Calculate rotation handle position in object space (extending upward from top edge)
+        rotate_handle = QPointF(rect.width() / 2, -self.rotation_handle_length)
+
+        # Store handles in object space
+        self.handle_locations = [corners[0], corners[1], corners[2], corners[3], top_mid, right_mid, bottom_mid, left_mid, rotate_handle]
+
         # Combine transforms: object space -> frame space -> widget space
         complete_transform = self.viewport_transform * frame_to_widget
 
-        # Map corners to widget space
+        # Transform corners to widget space for drawing
         top_left = complete_transform.map(corners[0])
         top_right = complete_transform.map(corners[1])
         bottom_right = complete_transform.map(corners[2])
         bottom_left = complete_transform.map(corners[3])
 
-        # Calculate midpoint positions
-        top_mid = QPointF((top_left.x() + top_right.x()) / 2, (top_left.y() + top_right.y()) / 2)
-        right_mid = QPointF((top_right.x() + bottom_right.x()) / 2, (top_right.y() + bottom_right.y()) / 2)
-        bottom_mid = QPointF((bottom_right.x() + bottom_left.x()) / 2, (bottom_right.y() + bottom_left.y()) / 2)
-        left_mid = QPointF((bottom_left.x() + top_left.x()) / 2, (bottom_left.y() + top_left.y()) / 2)
-
-        # Calculate rotation handle position
-        edge_vector = QPointF(top_right.x() - top_left.x(), top_right.y() - top_left.y())
-        edge_length = (edge_vector.x() ** 2 + edge_vector.y() ** 2) ** 0.5
-        if edge_length > 0:
-            edge_vector = QPointF(edge_vector.x() / edge_length, edge_vector.y() / edge_length)
-        normal_vector = QPointF(-edge_vector.y(), edge_vector.x())
-        rotate_handle = QPointF(top_mid.x() + normal_vector.x() * self.rotation_handle_length, top_mid.y() + normal_vector.y() * self.rotation_handle_length)
+        # Transform midpoints to widget space for drawing
+        top_mid_widget = complete_transform.map(top_mid)
+        rotate_handle_widget = complete_transform.map(rotate_handle)
 
         # Draw bounding box
         painter.setPen(QPen(self.bounding_box_outline, 1))
@@ -253,14 +272,17 @@ class TimelineObject:
         painter.drawPolygon(polygon)
 
         # Draw line from top midpoint to rotation handle
-        painter.drawLine(top_mid, rotate_handle)
+        painter.drawLine(top_mid_widget, rotate_handle_widget)
 
         # Draw handles
         painter.setPen(QPen(self.handle_outline, 1))
-        painter.setBrush(QBrush(self.handle_fill))
-        circle_radius = 3
-        for handle in [top_left, top_right, bottom_right, bottom_left, top_mid, right_mid, bottom_mid, left_mid, rotate_handle]:
-            painter.drawEllipse(handle, circle_radius, circle_radius)
+        for i, handle in enumerate(self.handle_locations):
+            if i == self.selected_handle:
+                painter.setBrush(QBrush(self.handle_outline))
+            else:
+                painter.setBrush(QBrush(self.handle_fill))
+            handle_widget = complete_transform.map(handle)
+            painter.drawEllipse(handle_widget, self.handle_size, self.handle_size)
 
         # Draw the rotation center handle
         rotation_center_widget = complete_transform.map(self.rotation_center)
@@ -277,7 +299,7 @@ class TimelineObject:
         )
         painter.drawEllipse(rotation_center_widget, self.rotation_center_handle_size, self.rotation_center_handle_size)
 
-    def check_viewport_mouse_collision(self, mouse_pos: QPointF) -> bool:
+    def check_viewport_mouse_collision(self, mouse_pos: QPointF, frame_to_widget: QTransform) -> bool:
         """Determines if the mouse clicked on the object"""
         if self.viewport_overlay_bounding_rect is None or self.viewport_transform is None:
             return False
@@ -287,10 +309,292 @@ class TimelineObject:
             return False
 
         local_pos = inverted_transform.map(mouse_pos)
-        return self.viewport_overlay_bounding_rect.contains(QPoint(floor(local_pos.x()), floor(local_pos.y())))
+
+        collision = self.viewport_overlay_bounding_rect.contains(QPoint(floor(local_pos.x()), floor(local_pos.y())))
+        if collision:
+            return True
+
+        # If selected, check the transform handles as well
+        if self.ui_is_selected:
+            # Convert handle size from window pixels to framebuffer pixels
+            origin_widget = frame_to_widget.map(QPointF(0, 0))
+            unit_widget = frame_to_widget.map(QPointF(1, 0))
+            scale = ((unit_widget.x() - origin_widget.x()) ** 2 + (unit_widget.y() - origin_widget.y()) ** 2) ** 0.5
+            handle_size_fb = self.handle_size / scale
+
+            # Check handles in framebuffer space
+            for i, handle_local in enumerate(self.handle_locations):
+                handle_fb = self.viewport_transform.map(handle_local)
+                distance = ((handle_fb.x() - mouse_pos.x()) ** 2 + (handle_fb.y() - mouse_pos.y()) ** 2) ** 0.5
+                if distance < handle_size_fb:
+                    return True
+
+        return False
 
     def set_application_state(self, application_state: ApplicationState):
         self.application_state = application_state
 
+    def viewport_mouse_press(self, mouse_pos: QPointF, frame_to_widget: QTransform) -> bool:
+        """Returns if an update is required for the viewport frame"""
+        need_update = False
+
+        self.is_dragging_corner = False
+        self.is_dragging_edge = False
+        self.is_dragging_rotate = False
+        self.is_dragging_center = False
+        self.is_dragging_transform = False
+        self.drag_start_transform = self.viewport_transform
+
+        last_selected_handle = self.selected_handle
+        self.selected_handle = None
+        # Convert handle size from window pixels to framebuffer pixels
+        origin_widget = frame_to_widget.map(QPointF(0, 0))
+        unit_widget = frame_to_widget.map(QPointF(1, 0))
+        scale = ((unit_widget.x() - origin_widget.x()) ** 2 + (unit_widget.y() - origin_widget.y()) ** 2) ** 0.5
+        handle_size_fb = self.handle_size / scale
+
+        # Check handles in framebuffer space
+        for i, handle_local in enumerate(self.handle_locations):
+            handle_fb = self.viewport_transform.map(handle_local)
+            distance = ((handle_fb.x() - mouse_pos.x()) ** 2 + (handle_fb.y() - mouse_pos.y()) ** 2) ** 0.5
+            if distance < handle_size_fb:
+                self.selected_handle = i
+                break  # Priority given to corners when overlapping
+        if last_selected_handle != self.selected_handle:
+            need_update = True
+
+        rotation_center_collision = False
+        if self.rotation_center is not None:
+            rotation_center_fb = self.viewport_transform.map(self.rotation_center)
+            rotation_center_handle_size_fb = self.rotation_center_handle_size / scale
+            distance_to_center = ((rotation_center_fb.x() - mouse_pos.x()) ** 2 + (rotation_center_fb.y() - mouse_pos.y()) ** 2) ** 0.5
+            if distance_to_center < rotation_center_handle_size_fb:
+                rotation_center_collision = True
+
+        if self.selected_handle in [0, 1, 2, 3]:  # Corner handle
+            self.is_dragging_corner = True
+            self.handle_start_position = self.handle_locations[self.selected_handle]
+            self.drag_anchor = {0: 2, 1: 3, 2: 0, 3: 1}[self.selected_handle]  # Diagonally opposite handle is the anchor
+            self.drag_axis = ""  # Unnecessary for this task
+        elif self.selected_handle in [4, 5, 6, 7]:  # Edge handle
+            self.is_dragging_edge = True
+            self.handle_start_position = self.handle_locations[self.selected_handle]
+            self.drag_anchor = {4: 6, 5: 7, 6: 4, 7: 5}[self.selected_handle]  # Directly opposite handle is the anchor
+            self.drag_axis = {4: 'y', 5: 'x', 6: 'y', 7: 'x'}[self.selected_handle]
+        elif self.selected_handle == 8:  # Rotation handle
+            self.is_dragging_rotate = True
+            self.handle_start_position = self.handle_locations[self.selected_handle]
+        elif rotation_center_collision:  # Rotation center
+            self.is_dragging_center = True
+        else:  # Translation
+            self.is_dragging_transform = True
+            self.handle_start_position = mouse_pos  # Store the mouse position to compute the offset later
+
+        return need_update
+
+    def viewport_mouse_move(self, mouse_pos: QPointF, frame_to_widget: QTransform) -> tuple[bool, bool]:
+        """Returns if an update is required for the viewport frame, if a re-render of the framebuffer is required"""
+        if self.is_dragging_corner:
+            self.viewport_transform = self.compute_corner_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
+            return True, True
+        elif self.is_dragging_edge:
+            self.viewport_transform = self.compute_edge_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
+            return True, True
+        elif self.is_dragging_rotate:
+            self.viewport_transform = self.compute_rotation_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
+            return True, True
+        elif self.is_dragging_center:
+            # Transform mouse position from framebuffer to object space
+            inverted, invertible = self.drag_start_transform.inverted()
+            if invertible:
+                self.rotation_center = inverted.map(mouse_pos)
+            return True, True
+        elif self.is_dragging_transform:
+            self.viewport_transform = self.compute_translation_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
+            return True, True
+
+        # Check for hover updates
+        need_update = False
+        last_selected_handle = self.selected_handle
+        self.selected_handle = None
+        # Convert handle size from window pixels to framebuffer pixels
+        origin_widget = frame_to_widget.map(QPointF(0, 0))
+        unit_widget = frame_to_widget.map(QPointF(1, 0))
+        scale = ((unit_widget.x() - origin_widget.x()) ** 2 + (unit_widget.y() - origin_widget.y()) ** 2) ** 0.5
+        handle_size_fb = self.handle_size / scale
+
+        # Check handles in framebuffer space
+        for i, handle_local in enumerate(self.handle_locations):
+            handle_fb = self.viewport_transform.map(handle_local)
+            distance = ((handle_fb.x() - mouse_pos.x()) ** 2 + (handle_fb.y() - mouse_pos.y()) ** 2) ** 0.5
+            if distance < handle_size_fb:
+                self.selected_handle = i
+                break
+        if last_selected_handle != self.selected_handle:
+            need_update = True
+
+        return need_update, False
+
+    def viewport_mouse_release(self, mouse_pos: QPointF) -> bool:
+        """Returns if an update is required for the viewport frame"""
+        self.is_dragging_corner = False
+        self.is_dragging_edge = False
+        self.is_dragging_rotate = False
+        self.is_dragging_center = False
+        self.is_dragging_transform = False
+        return False
+
+    def compute_corner_transform(self, mouse_framebuffer_pos: QPointF, drag_start_transform: QTransform, handle_start_position: QPointF) -> QTransform:
+        """Compute new transform when dragging a corner handle.
+
+        Scales the object around the anchor corner (diagonally opposite to dragged corner).
+        The anchor remains fixed in framebuffer space whilst the dragged corner follows the mouse.
+        """
+        # Get positions in object space
+        anchor_obj = self.handle_locations[self.drag_anchor]
+        handle_obj = handle_start_position
+
+        # Transform mouse position from framebuffer to object space
+        inverted, invertible = drag_start_transform.inverted()
+        if not invertible:
+            return self.viewport_transform
+
+        mouse_obj = inverted.map(mouse_framebuffer_pos)
+
+        # Compute deltas in object space
+        delta_original = QPointF(handle_obj.x() - anchor_obj.x(), handle_obj.y() - anchor_obj.y())
+        delta_target = QPointF(mouse_obj.x() - anchor_obj.x(), mouse_obj.y() - anchor_obj.y())
+
+        # Check for degenerate cases
+        if abs(delta_original.x()) < 0.001 or abs(delta_original.y()) < 0.001:
+            return self.viewport_transform
+        if abs(delta_target.x()) < 0.001 or abs(delta_target.y()) < 0.001:
+            return self.viewport_transform
+
+        # Compute scale factors
+        sx = delta_target.x() / delta_original.x()
+        sy = delta_target.y() / delta_original.y()
+
+        # Build local scale transform centred at anchor in object space
+        local_scale = QTransform()
+        local_scale.translate(anchor_obj.x(), anchor_obj.y())
+        local_scale.scale(sx, sy)
+        local_scale.translate(-anchor_obj.x(), -anchor_obj.y())
+
+        # Compose with existing transform
+        return local_scale * drag_start_transform
+
+    def compute_edge_transform(self, mouse_framebuffer_pos: QPointF, drag_start_transform: QTransform, handle_start_position: QPointF) -> QTransform:
+        """Compute new transform when dragging an edge handle.
+
+        Scales the object perpendicular to the anchor edge (opposite edge).
+        The anchor edge remains fixed in framebuffer space whilst the dragged edge follows the mouse.
+        """
+        # Get positions in object space
+        anchor_obj = self.handle_locations[self.drag_anchor]
+        handle_obj = handle_start_position
+
+        # Transform mouse position from framebuffer to object space
+        inverted, invertible = drag_start_transform.inverted()
+        if not invertible:
+            return self.viewport_transform
+
+        mouse_obj = inverted.map(mouse_framebuffer_pos)
+
+        # Compute deltas in object space
+        delta_original = QPointF(handle_obj.x() - anchor_obj.x(), handle_obj.y() - anchor_obj.y())
+        delta_target = QPointF(mouse_obj.x() - anchor_obj.x(), mouse_obj.y() - anchor_obj.y())
+
+        # Determine scaling axis and compute scale factor
+        if self.drag_axis == 'y':
+            if abs(delta_original.y()) < 0.001:
+                return self.viewport_transform
+            if abs(delta_target.y()) < 0.001:
+                return self.viewport_transform
+
+            sx = 1.0  # Preserve X scale
+            sy = delta_target.y() / delta_original.y()
+        else:  # 'x'
+            if abs(delta_original.x()) < 0.001:
+                return self.viewport_transform
+            if abs(delta_target.x()) < 0.001:
+                return self.viewport_transform
+
+            sx = delta_target.x() / delta_original.x()
+            sy = 1.0  # Preserve Y scale
+
+        # Build local scale transform centred at anchor in object space
+        local_scale = QTransform()
+        local_scale.translate(anchor_obj.x(), anchor_obj.y())
+        local_scale.scale(sx, sy)
+        local_scale.translate(-anchor_obj.x(), -anchor_obj.y())
+
+        # Compose with existing transform
+        return local_scale * drag_start_transform
+
+    def compute_rotation_transform(self, mouse_framebuffer_pos: QPointF, drag_start_transform: QTransform, handle_start_position: QPointF) -> QTransform:
+        """Compute new transform when dragging the rotation handle.
+
+        Rotates the object around self.rotation_center (in object space).
+        If rotation_center is None, returns the current transform unchanged.
+        The rotation is applied incrementally in framebuffer space, preserving
+        the existing scale and position whilst only modifying rotation.
+        """
+        # Check if rotation centre is set
+        if self.rotation_center is None:
+            return self.viewport_transform
+
+        # Map rotation centre to framebuffer space (this point remains fixed)
+        center_fb = drag_start_transform.map(self.rotation_center)
+
+        # Map handle start position to framebuffer space
+        handle_fb_start = drag_start_transform.map(handle_start_position)
+
+        # Calculate vectors from centre to handle start and to mouse
+        dx_start = handle_fb_start.x() - center_fb.x()
+        dy_start = handle_fb_start.y() - center_fb.y()
+
+        dx_current = mouse_framebuffer_pos.x() - center_fb.x()
+        dy_current = mouse_framebuffer_pos.y() - center_fb.y()
+
+        # Check for degenerate case: mouse too close to rotation centre
+        dist_start = (dx_start ** 2 + dy_start ** 2) ** 0.5
+        dist_current = (dx_current ** 2 + dy_current ** 2) ** 0.5
+
+        if dist_start < 1.0 or dist_current < 1.0:
+            return self.viewport_transform
+
+        # Calculate angles
+        angle_start = math.atan2(dy_start, dx_start)
+        angle_current = math.atan2(dy_current, dx_current)
+
+        # Compute incremental rotation angle
+        rotation_angle = angle_current - angle_start
+        rotation_degrees = math.degrees(rotation_angle)
+
+        # Create a rotation transform in framebuffer space around the rotation centre
+        rotation_transform = QTransform()
+        rotation_transform.translate(center_fb.x(), center_fb.y())
+        rotation_transform.rotate(rotation_degrees)
+        rotation_transform.translate(-center_fb.x(), -center_fb.y())
+
+        return drag_start_transform * rotation_transform
+
+    def compute_translation_transform(self, mouse_framebuffer_pos: QPointF, drag_start_transform: QTransform, handle_start_position: QPointF) -> QTransform:
+        """Compute new transform when dragging the object (no handle selected).
+
+        Translates the entire object in framebuffer space. The translation delta is computed
+        between the current mouse position and the drag start position, then applied to
+        preserve the object's scale and rotation whilst shifting its position.
+        """
+        # Calculate translation delta in framebuffer space
+        dx = mouse_framebuffer_pos.x() - handle_start_position.x()
+        dy = mouse_framebuffer_pos.y() - handle_start_position.y()
+
+        # Create translation transform in framebuffer space
+        translation = QTransform()
+        translation.translate(dx, dy)
+
+        return drag_start_transform * translation
 
 # WIP long term: implement separate export implementations to focus on speed
