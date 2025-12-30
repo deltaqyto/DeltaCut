@@ -3,6 +3,7 @@ from math import floor
 
 from PyQt6.QtCore import QRect, Qt, QPointF, QPoint
 from PyQt6.QtGui import QImage, QColor, QFont, QPainter, QPen, QTransform, QBrush, QPolygonF
+from PyQt6.QtWidgets import QApplication
 
 from core.GUI.themes import ACTIVE_THEME
 from core.application_state import ApplicationState
@@ -399,11 +400,15 @@ class TimelineObject:
 
     def viewport_mouse_move(self, mouse_pos: QPointF, frame_to_widget: QTransform) -> tuple[bool, bool]:
         """Returns if an update is required for the viewport frame, if a re-render of the framebuffer is required"""
+        enable_centering = QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier  # Apply centering where viable
+        enable_centering = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)  # Apply centering where viable
         if self.is_dragging_corner:
             self.viewport_transform = self.compute_corner_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
+            self.viewport_transform = self.compute_corner_transform(mouse_pos, self.drag_start_transform, self.handle_start_position, enable_centering)
             return True, True
         elif self.is_dragging_edge:
             self.viewport_transform = self.compute_edge_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
+            self.viewport_transform = self.compute_edge_transform(mouse_pos, self.drag_start_transform, self.handle_start_position, enable_centering)
             return True, True
         elif self.is_dragging_rotate:
             self.viewport_transform = self.compute_rotation_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
@@ -449,14 +454,14 @@ class TimelineObject:
         self.is_dragging_transform = False
         return False
 
-    def compute_corner_transform(self, mouse_framebuffer_pos: QPointF, drag_start_transform: QTransform, handle_start_position: QPointF) -> QTransform:
+    def compute_corner_transform(self, mouse_framebuffer_pos: QPointF, drag_start_transform: QTransform, handle_start_position: QPointF, enable_centering: bool = False) -> QTransform:
         """Compute new transform when dragging a corner handle.
 
         Scales the object around the anchor corner (diagonally opposite to dragged corner).
         The anchor remains fixed in framebuffer space whilst the dragged corner follows the mouse.
         """
         # Get positions in object space
-        anchor_obj = self.handle_locations[self.drag_anchor]
+        anchor_obj = self.rotation_center if enable_centering else self.handle_locations[self.drag_anchor]
         handle_obj = handle_start_position
 
         # Transform mouse position from framebuffer to object space
@@ -489,14 +494,14 @@ class TimelineObject:
         # Compose with existing transform
         return local_scale * drag_start_transform
 
-    def compute_edge_transform(self, mouse_framebuffer_pos: QPointF, drag_start_transform: QTransform, handle_start_position: QPointF) -> QTransform:
+    def compute_edge_transform(self, mouse_framebuffer_pos: QPointF, drag_start_transform: QTransform, handle_start_position: QPointF, enable_centering: bool = False) -> QTransform:
         """Compute new transform when dragging an edge handle.
 
         Scales the object perpendicular to the anchor edge (opposite edge).
         The anchor edge remains fixed in framebuffer space whilst the dragged edge follows the mouse.
         """
         # Get positions in object space
-        anchor_obj = self.handle_locations[self.drag_anchor]
+        anchor_obj = self.rotation_center if enable_centering else self.handle_locations[self.drag_anchor]
         handle_obj = handle_start_position
 
         # Transform mouse position from framebuffer to object space
