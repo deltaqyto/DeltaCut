@@ -16,11 +16,14 @@ class TranscriptResource(BaseResource):
         if not self.transcripts:
             self._load()
 
-    def _load(self):
+    def _load(self, override_data=None):
         """Load transcript from json"""
 
-        with open(self.path, 'r') as f:
-            data = json.loads(f.read())
+        if override_data is not None:
+            data = override_data
+        else:
+            with open(self.path, 'r') as f:
+                data = json.loads(f.read())
 
         assert 'transcripts' in data, "Missing 'transcripts' key in JSON data"
         assert 'timestamps' in data, "Missing 'timestamps' key in JSON data"
@@ -48,6 +51,10 @@ class TranscriptResource(BaseResource):
         json_bytes = json_str.encode('utf-8')
 
         return '.json', json_bytes
+
+    def import_resource_file(self, resource_file: bytes):
+        data = json.loads(resource_file.decode('utf-8'))
+        self._load(data)
 
     def __del__(self):
         """Release data from memory."""
