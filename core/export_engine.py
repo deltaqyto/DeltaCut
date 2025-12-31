@@ -278,8 +278,6 @@ class ExportWorker(QObject):
 
                 # Update shared frame
                 self.latest_frame = frame_buffer
-                self.latest_frame_id = current_frame
-
                 frame_data = frame_buffer.bits().asarray(frame_buffer.sizeInBytes())
 
                 # Write frame to appropriate output
@@ -302,6 +300,8 @@ class ExportWorker(QObject):
                 audio_bytes = audio_data.tobytes()
 
                 self.ffmpeg_audio_process.stdin.write(audio_bytes)
+
+            self.latest_frame_id = current_frame
 
     def _cleanup_processes(self):
         """Close FFmpeg processes and wait for completion"""
@@ -412,12 +412,15 @@ class ExportEngine(QObject):
         self.timeline = timeline
 
         self.viewport_update_rate = 4  # Viewport update rate hz
+        self.playhead_update_rate = 30  # Playhead update rate hz
         self.frame_at_start = 0  # Frame that was active before export began
 
         self.worker: ExportWorker | None = None
         self.worker_thread = None
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self._update_display)
+        self.viewport_update_timer = QTimer()
+        self.viewport_update_timer.timeout.connect(self._update_display)
+        self.playhead_update_timer = QTimer()
+        self.playhead_update_timer.timeout.connect(self._update_playhead)
 
         self.is_exporting = False
 
@@ -469,14 +472,16 @@ class ExportEngine(QObject):
         # Start export
         self.is_exporting = True
         self.worker_thread.start()
-        self.update_timer.start(1000 // self.viewport_update_rate)
+        self.viewport_update_timer.start(1000 // self.viewport_update_rate)
+        self.playhead_update_timer.start(1000 // self.playhead_update_rate)
 
     def stop(self):
         """Stop export process"""
         if not self.is_exporting:
             return
 
-        self.update_timer.stop()
+        self.viewport_update_timer.stop()
+        self.playhead_update_timer.stop()
 
         if self.worker:
             self.worker.stop()
@@ -503,16 +508,23 @@ class ExportEngine(QObject):
 
         # Pull latest frame from worker
         latest_frame = self.worker.latest_frame
-        latest_frame_id = self.worker.latest_frame_id
-
         if latest_frame is None:
             return
 
         # Update application state frame buffer
         self.application_state.rendered_frame.visual_frame = latest_frame.copy()
         self.application_state.signal_frame_buffer_update.emit()
+
+    def _update_playhead(self):
+        """Update display with latest rendered frame"""
+        if not self.worker:
+            return
+
+        latest_frame_id = self.worker.latest_frame_id
+
         self.application_state.current_playback_frame = latest_frame_id
         self.application_state.signal_frame_number_update.emit()
+
 
     def set_application_state(self, application_state: ApplicationState):
         self.application_state = application_state
