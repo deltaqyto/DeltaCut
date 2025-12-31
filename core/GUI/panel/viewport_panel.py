@@ -1,4 +1,4 @@
-from PyQt6.QtCore import QRect, pyqtSlot
+from PyQt6.QtCore import QRect, pyqtSlot, QPointF
 from PyQt6.QtGui import QPaintEvent, QPainter, QColor, QTransform, QResizeEvent, QMouseEvent
 
 from core.GUI.panel.base_panel import BasePanel
@@ -22,6 +22,7 @@ class ViewportPanel(BasePanel):
         self.current_frame = self.project.application_state.rendered_frame.visual_frame
         self.frame_to_widget: QTransform = QTransform()  # Frame to widget transform
         self.target_rect: QRect = QRect()  # Rectangle containing the visible frame
+        self.frame_scale_factor: float = 0  # Scaling factor from widget pixels to frame pixels
 
         self.panel_type = 'ViewportPanel'
 
@@ -33,6 +34,7 @@ class ViewportPanel(BasePanel):
         self.padding = 32  # px of padding around the frame
 
         self.update_frame_transform()
+        self.calculate_frame_scaling_factor()
 
     @pyqtSlot()
     def handle_frame_update(self):
@@ -60,8 +62,9 @@ class ViewportPanel(BasePanel):
 
         painter.drawImage(self.target_rect, self.current_frame)
 
+        painter.setTransform(self.frame_to_widget)
         for entry in self.project.application_state.rendered_entries:
-            entry.timeline_object.paint_viewport_overlay(painter, self.frame_to_widget)
+            entry.timeline_object.paint_viewport_overlay(painter, self.frame_scale_factor)
 
     def _draw_transparency_checkerboard(self, x_offset, y_offset, target_width, target_height, painter):
         """
@@ -118,11 +121,11 @@ class ViewportPanel(BasePanel):
         clicked_entry = None
         selected_entry = self.project.application_state.selected_entry
 
-        if selected_entry is not None and selected_entry.timeline_object.check_viewport_mouse_collision(frame_mouse_pos, self.frame_to_widget):
+        if selected_entry is not None and selected_entry.timeline_object.check_viewport_mouse_collision(frame_mouse_pos, self.frame_scale_factor):
             clicked_entry = selected_entry
         else:
             for entry in self.project.application_state.rendered_entries[::-1]:
-                if entry.timeline_object.check_viewport_mouse_collision(frame_mouse_pos, self.frame_to_widget):
+                if entry.timeline_object.check_viewport_mouse_collision(frame_mouse_pos, self.frame_scale_factor):
                     clicked_entry = entry
                     break
 
@@ -142,7 +145,7 @@ class ViewportPanel(BasePanel):
             self.project.application_state.signal_entry_selection_update.emit()
 
         if clicked_entry is not None:
-            if clicked_entry.timeline_object.viewport_mouse_press(frame_mouse_pos, self.frame_to_widget):
+            if clicked_entry.timeline_object.viewport_mouse_press(frame_mouse_pos, self.frame_scale_factor):
                 self.update()
 
         event.ignore()
@@ -172,7 +175,7 @@ class ViewportPanel(BasePanel):
         frame_mouse_pos = inverted.map(event.position())
         if self.project.application_state.selected_entry is not None:
             selected_entry = self.project.application_state.selected_entry
-            update, re_render = selected_entry.timeline_object.viewport_mouse_move(frame_mouse_pos, self.frame_to_widget)
+            update, re_render = selected_entry.timeline_object.viewport_mouse_move(frame_mouse_pos, self.frame_scale_factor)
             if re_render:
                 self.project.application_state.rendered_frame.visual_frame = self.project.timeline.render_frame(self.project.application_state.current_playback_frame)
                 self.project.application_state.signal_frame_buffer_update.emit()
@@ -185,6 +188,7 @@ class ViewportPanel(BasePanel):
         """Recalculate frame transform whenever widget is resized"""
         super().resizeEvent(event)
         self.update_frame_transform()
+        self.calculate_frame_scaling_factor()
 
     def update_frame_transform(self):
         """Calculate the transform from frame coordinates to widget coordinates"""
@@ -219,3 +223,12 @@ class ViewportPanel(BasePanel):
         self.frame_to_widget = QTransform(scale_x, 0, 0,
                                           0, scale_y, 0,
                                           x_offset, y_offset, 1)
+
+    def calculate_frame_scaling_factor(self):
+        """Determine and store scaling factor of a widget pixel vs frame pixel.
+        Used to perform mouse collision checks"""
+
+        # Convert handle size from window pixels to framebuffer pixels
+        origin_widget = self.frame_to_widget.map(QPointF(0, 0))
+        unit_widget = self.frame_to_widget.map(QPointF(1, 0))
+        self.frame_scale_factor = ((unit_widget.x() - origin_widget.x()) ** 2 + (unit_widget.y() - origin_widget.y()) ** 2) ** 0.5

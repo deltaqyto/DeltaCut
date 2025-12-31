@@ -212,12 +212,12 @@ class TimelineObject:
                 painter.setBrush(QColor(0, 0, 0, 40))
                 painter.drawRoundedRect(rect, 4, 4)
 
-    def paint_viewport_overlay(self, painter: QPainter, frame_to_widget: QTransform):
+    def paint_viewport_overlay(self, painter: QPainter, frame_scale_factor: float):
         """Render the element in the video viewport.
 
         Args:
             painter: QPainter instance
-            frame_to_widget: QTransform mapping from canonical frame space to widget space
+            frame_scale_factor: Scaling of widget pixels to frame pixels
         """
         # If not visible on viewport, do not render overlays
         if not self.can_play_video:
@@ -253,18 +253,15 @@ class TimelineObject:
         # Store handles in object space
         self.handle_locations = [corners[0], corners[1], corners[2], corners[3], top_mid, right_mid, bottom_mid, left_mid, rotate_handle]
 
-        # Combine transforms: object space -> frame space -> widget space
-        complete_transform = self.viewport_transform * frame_to_widget
-
         # Transform corners to widget space for drawing
-        top_left = complete_transform.map(corners[0])
-        top_right = complete_transform.map(corners[1])
-        bottom_right = complete_transform.map(corners[2])
-        bottom_left = complete_transform.map(corners[3])
+        top_left = self.viewport_transform.map(corners[0])
+        top_right = self.viewport_transform.map(corners[1])
+        bottom_right = self.viewport_transform.map(corners[2])
+        bottom_left = self.viewport_transform.map(corners[3])
 
         # Transform midpoints to widget space for drawing
-        top_mid_widget = complete_transform.map(top_mid)
-        rotate_handle_widget = complete_transform.map(rotate_handle)
+        top_mid_widget = self.viewport_transform.map(top_mid)
+        rotate_handle_widget = self.viewport_transform.map(rotate_handle)
 
         # Draw bounding box
         painter.setPen(QPen(self.bounding_box_outline, 1))
@@ -276,31 +273,33 @@ class TimelineObject:
         painter.drawLine(top_mid_widget, rotate_handle_widget)
 
         # Draw handles
+        scaled_handle = self.handle_size / frame_scale_factor
         painter.setPen(QPen(self.handle_outline, 1))
         for i, handle in enumerate(self.handle_locations):
             if i == self.selected_handle:
                 painter.setBrush(QBrush(self.handle_outline))
             else:
                 painter.setBrush(QBrush(self.handle_fill))
-            handle_widget = complete_transform.map(handle)
-            painter.drawEllipse(handle_widget, self.handle_size, self.handle_size)
+            handle_widget = self.viewport_transform.map(handle)
+            painter.drawEllipse(handle_widget, scaled_handle, scaled_handle)
 
         # Draw the rotation center handle
-        rotation_center_widget = complete_transform.map(self.rotation_center)
+        scaled_handle = self.rotation_center_handle_size / frame_scale_factor
+        rotation_center_widget = self.viewport_transform.map(self.rotation_center)
         painter.setPen(QPen(self.handle_fill, 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
         painter.drawLine(
-            QPointF(rotation_center_widget.x() - self.rotation_center_handle_size, rotation_center_widget.y()),
-            QPointF(rotation_center_widget.x() + self.rotation_center_handle_size, rotation_center_widget.y())
+            QPointF(rotation_center_widget.x() - scaled_handle, rotation_center_widget.y()),
+            QPointF(rotation_center_widget.x() + scaled_handle, rotation_center_widget.y())
         )
         painter.drawLine(
-            QPointF(rotation_center_widget.x(), rotation_center_widget.y() - self.rotation_center_handle_size),
-            QPointF(rotation_center_widget.x(), rotation_center_widget.y() + self.rotation_center_handle_size)
+            QPointF(rotation_center_widget.x(), rotation_center_widget.y() - scaled_handle),
+            QPointF(rotation_center_widget.x(), rotation_center_widget.y() + scaled_handle)
         )
-        painter.drawEllipse(rotation_center_widget, self.rotation_center_handle_size, self.rotation_center_handle_size)
+        painter.drawEllipse(rotation_center_widget, scaled_handle, scaled_handle)
 
-    def check_viewport_mouse_collision(self, mouse_pos: QPointF, frame_to_widget: QTransform) -> bool:
+    def check_viewport_mouse_collision(self, mouse_pos: QPointF, frame_scale_factor: float) -> bool:
         """Determines if the mouse clicked on the object"""
         if self.viewport_overlay_bounding_rect is None or self.viewport_transform is None:
             return False
@@ -317,11 +316,7 @@ class TimelineObject:
 
         # If selected, check the transform handles as well
         if self.ui_is_selected:
-            # Convert handle size from window pixels to framebuffer pixels
-            origin_widget = frame_to_widget.map(QPointF(0, 0))
-            unit_widget = frame_to_widget.map(QPointF(1, 0))
-            scale = ((unit_widget.x() - origin_widget.x()) ** 2 + (unit_widget.y() - origin_widget.y()) ** 2) ** 0.5
-            handle_size_fb = self.handle_size / scale
+            handle_size_fb = self.handle_size / frame_scale_factor
 
             # Check handles in framebuffer space
             for i, handle_local in enumerate(self.handle_locations):
@@ -332,7 +327,7 @@ class TimelineObject:
 
             rotation_center = self.viewport_transform.map(self.rotation_center)
             distance = ((rotation_center.x() - mouse_pos.x()) ** 2 + (rotation_center.y() - mouse_pos.y()) ** 2) ** 0.5
-            if distance < self.rotation_center_handle_size / scale:
+            if distance < self.rotation_center_handle_size / frame_scale_factor:
                 return True
 
         return False
@@ -340,7 +335,7 @@ class TimelineObject:
     def set_application_state(self, application_state: ApplicationState):
         self.application_state = application_state
 
-    def viewport_mouse_press(self, mouse_pos: QPointF, frame_to_widget: QTransform) -> bool:
+    def viewport_mouse_press(self, mouse_pos: QPointF, frame_scale_factor: float) -> bool:
         """Returns if an update is required for the viewport frame"""
         need_update = False
 
@@ -353,11 +348,8 @@ class TimelineObject:
 
         last_selected_handle = self.selected_handle
         self.selected_handle = None
-        # Convert handle size from window pixels to framebuffer pixels
-        origin_widget = frame_to_widget.map(QPointF(0, 0))
-        unit_widget = frame_to_widget.map(QPointF(1, 0))
-        scale = ((unit_widget.x() - origin_widget.x()) ** 2 + (unit_widget.y() - origin_widget.y()) ** 2) ** 0.5
-        handle_size_fb = self.handle_size / scale
+
+        handle_size_fb = self.handle_size / frame_scale_factor
 
         # Check handles in framebuffer space
         for i, handle_local in enumerate(self.handle_locations):
@@ -372,7 +364,7 @@ class TimelineObject:
         rotation_center_collision = False
         if self.rotation_center is not None:
             rotation_center_fb = self.viewport_transform.map(self.rotation_center)
-            rotation_center_handle_size_fb = self.rotation_center_handle_size / scale
+            rotation_center_handle_size_fb = self.rotation_center_handle_size / frame_scale_factor
             distance_to_center = ((rotation_center_fb.x() - mouse_pos.x()) ** 2 + (rotation_center_fb.y() - mouse_pos.y()) ** 2) ** 0.5
             if distance_to_center < rotation_center_handle_size_fb:
                 rotation_center_collision = True
@@ -398,7 +390,7 @@ class TimelineObject:
 
         return need_update
 
-    def viewport_mouse_move(self, mouse_pos: QPointF, frame_to_widget: QTransform) -> tuple[bool, bool]:
+    def viewport_mouse_move(self, mouse_pos: QPointF, frame_scale_factor: float) -> tuple[bool, bool]:
         """Returns if an update is required for the viewport frame, if a re-render of the framebuffer is required"""
         enable_centering = QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier  # Apply centering where viable
         enable_centering = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)  # Apply centering where viable
@@ -427,11 +419,8 @@ class TimelineObject:
         need_update = False
         last_selected_handle = self.selected_handle
         self.selected_handle = None
-        # Convert handle size from window pixels to framebuffer pixels
-        origin_widget = frame_to_widget.map(QPointF(0, 0))
-        unit_widget = frame_to_widget.map(QPointF(1, 0))
-        scale = ((unit_widget.x() - origin_widget.x()) ** 2 + (unit_widget.y() - origin_widget.y()) ** 2) ** 0.5
-        handle_size_fb = self.handle_size / scale
+
+        handle_size_fb = self.handle_size / frame_scale_factor
 
         # Check handles in framebuffer space
         for i, handle_local in enumerate(self.handle_locations):
@@ -606,5 +595,3 @@ class TimelineObject:
         translation.translate(dx, dy)
 
         return drag_start_transform * translation
-
-# WIP long term: implement separate export implementations to focus on speed
