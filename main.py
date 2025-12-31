@@ -41,7 +41,7 @@ def main():
 
     # Temporarily hardcode export settings
     application_state.project_settings.export_container.file_path = str(Path("debug") / "output")
-    application_state.project_settings.export_container.export_audio.set_value(False)
+    #application_state.project_settings.export_container.export_video.set_value(False)
     application_state.project_settings.export_codec.audio_codec.set_value('mp3')
 
     project = Project(application_state)
