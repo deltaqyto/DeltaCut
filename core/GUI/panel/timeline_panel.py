@@ -107,7 +107,9 @@ class TimelinePanel(BasePanel):
 
     def keyPressEvent(self, event: QKeyEvent):
         if not self.project.application_state.is_timeline_locked and self.has_mouse:
-            if event.key() == Qt.Key.Key_Left:
+            if self.is_dragging_playhead or self.is_dragging_handle or self.is_dragging_handle_lock:
+                pass  # Do not move the pointer if a drag is in progress
+            elif event.key() == Qt.Key.Key_Left:
                 self.project.application_state.current_playback_frame -= 1
                 self.project.application_state.signal_frame_number_update.emit()
                 self.project.render_current_frame_to_buffer()
