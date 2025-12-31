@@ -241,7 +241,7 @@ class TimelinePanel(BasePanel):
         if selection_has_changed:
             self.project.application_state.selected_entry = self.selected_timeline_entry
             self.project.application_state.signal_entry_selection_update.emit()
-            self.compute_snap_frames()
+        self.compute_snap_frames()
 
         event.ignore()
 
@@ -252,19 +252,10 @@ class TimelinePanel(BasePanel):
 
         mouse_frame_position = self.map_pixel_to_frame(event.position().x(), self.drag_pixels_per_frame, self.drag_viewport_left)
 
-        if not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:  # Disable snapping when CTRL is pressed
-            # Snap to nearby targets
-            closest_snap_frame = None
-            closest_snap_distance = self.handle_snap_distance
-            for snap_frame in self.handle_snap_frames:
-                if abs(mouse_frame_position - snap_frame) < min(closest_snap_distance, self.handle_snap_distance):
-                    closest_snap_frame = snap_frame
-                    closest_snap_distance = abs(mouse_frame_position - snap_frame)
-            if closest_snap_frame is not None:
-                mouse_frame_position = closest_snap_frame
-
         # Handle playhead movement
         if self.is_dragging_playhead:
+            if not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:  # Disable snapping when CTRL is pressed
+                mouse_frame_position, _ = self._snap_frame_to_snap_points(mouse_frame_position)
             if time() - self.last_frame_update_time > self.maximum_playhead_drag_update_period:
                 frame_buffer = self.project.timeline.render_frame(mouse_frame_position)
 
@@ -299,10 +290,26 @@ class TimelinePanel(BasePanel):
                 new_start = mouse_frame_position - self.selected_entry_frame_offset
                 new_stop = new_start + self.selected_timeline_entry.timeline_object.duration
 
+                # Snap start and stop. Pick option with closer distance
+                if not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:
+                    snap_start, distance_start = self._snap_frame_to_snap_points(new_start)
+
+                    snap_stop, distance_stop = self._snap_frame_to_snap_points(new_stop)
+                    if distance_start <= distance_stop:
+                        new_start = snap_start
+                        new_stop = snap_start + self.selected_timeline_entry.timeline_object.duration
+                    else:
+                        new_stop = snap_stop
+                        new_start = snap_stop - self.selected_timeline_entry.timeline_object.duration
+
             elif self.selected_entry_handle == 'left':
+                if not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:  # Disable snapping when CTRL is pressed
+                    mouse_frame_position, _ = self._snap_frame_to_snap_points(mouse_frame_position)
                 new_start = mouse_frame_position
 
             elif self.selected_entry_handle == 'right':
+                if not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:  # Disable snapping when CTRL is pressed
+                    mouse_frame_position, _ = self._snap_frame_to_snap_points(mouse_frame_position)
                 new_stop = mouse_frame_position
 
             else:  # No handle is set
@@ -494,3 +501,15 @@ class TimelinePanel(BasePanel):
             handle = 'top'
 
         return True, handle
+
+    def _snap_frame_to_snap_points(self, frame, override_closest_distance=None):
+        """Snap input frame number to snap points. Returns original if none are in range."""
+        closest_snap_frame = frame
+
+        # Snap to nearby targets
+        closest_snap_distance = self.handle_snap_distance if override_closest_distance is None else override_closest_distance
+        for snap_frame in self.handle_snap_frames:
+            if abs(frame - snap_frame) < min(closest_snap_distance, self.handle_snap_distance):
+                closest_snap_frame = snap_frame
+                closest_snap_distance = abs(frame - snap_frame)
+        return closest_snap_frame, closest_snap_distance
