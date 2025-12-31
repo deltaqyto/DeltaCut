@@ -1,9 +1,9 @@
+import os
 import subprocess
-import threading
 from pathlib import Path
+import tempfile
 
 import numpy as np
-from namedpipe import NPopen
 from PyQt6.QtCore import QObject, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QImage
 
@@ -37,23 +37,10 @@ class ExportWorker(QObject):
         self.ffmpeg_video_process = None
         self.ffmpeg_audio_process = None
 
-        self.video_pipe_path = None
-        self.audio_pipe_path = None
-        self.video_pipe_file = None
-        self.audio_pipe_object = None
+        self.temp_audio_file = None
 
-        self.frame_lock = threading.Lock()
         self.latest_frame = None
         self.latest_frame_id: int = 0
-
-        # Threading for concurrent pipe writing
-        self.video_data = None
-        self.audio_data = None
-        self.write_ready = threading.Event()
-        self.write_done = threading.Event()
-        self.video_thread = None
-        self.audio_thread = None
-        self.threads_running = False
 
     def run(self):
         """Main export loop running in worker thread"""
@@ -63,43 +50,48 @@ class ExportWorker(QObject):
             export_audio = project.export_container.export_audio.get_value()
             video_format = project.export_container.video_format.get_value()
 
-            # Determine if we need named pipes
-            needs_pipes = (export_video and video_format == "Video" and export_audio and
-                           not project.export_container.audio_in_separate_file.get_value())
+            self._setup_export()
 
-            if needs_pipes:
-                # Use named pipes for video with embedded audio
-                with NPopen('wb') as video_pipe, NPopen('wb') as audio_pipe:
-                    self.video_pipe_path = video_pipe.path
-                    self.audio_pipe_path = audio_pipe.path
+            # Stage 1: Export audio to temporary file if video will embed it
+            if (export_video and video_format == "Video" and export_audio and
+                    not project.export_container.audio_in_separate_file.get_value()):
 
-                    self._setup_export()
+                # Create temporary audio file
+                temp_fd, self.temp_audio_file = tempfile.mkstemp(suffix='.wav')
+                os.close(temp_fd)
 
-                    # Only wait for video pipe - audio pipe connects when FFmpeg opens it
-                    self.video_pipe_file = video_pipe.wait()
-                    self.audio_pipe_object = audio_pipe
+                # Export audio to temp file
+                self.ffmpeg_audio_process = self._create_audio_process(output_file=self.temp_audio_file)
+                self._process_frames(export_video=False, export_audio=True)
+                self._cleanup_processes()
 
-                    # Start writer threads now that pipe objects are available
-                    self._start_writer_threads()
-
-                    self._process_frames()
+                # Stage 2: Export video with audio file
+                frame_width, frame_height = project.export_codec.frame_dimensions.get_value()
+                self.ffmpeg_video_process = self._create_video_with_audio_file_process(
+                    frame_width, frame_height, self.temp_audio_file
+                )
+                self.active_entries = []
+                self.next_entry_index = 0
+                self._process_frames(export_video=True, export_audio=False)
             else:
-                # No pipes needed
-                self.video_pipe_path = None
-                self.audio_pipe_path = None
-                self.video_pipe_file = None
-                self.audio_pipe_object = None
+                # Single stage: export video and/or audio
+                self._process_frames(export_video=export_video, export_audio=export_audio)
 
-                self._setup_export()
-                self._process_frames()
         finally:
             self._cleanup_processes()
+
+            # Clean up temporary audio file
+            if self.temp_audio_file:
+                try:
+                    Path(self.temp_audio_file).unlink(missing_ok=True)
+                except Exception as e:
+                    print(f"Export: Failed to delete temporary audio file: {e}")
+
             self.finished.emit()
 
     def stop(self):
         """Request immediate stop of export"""
         self.should_stop = True
-        self.write_ready.set()
 
     def _setup_export(self):
         """Initialise export parameters and FFmpeg processes"""
@@ -124,8 +116,8 @@ class ExportWorker(QObject):
         # Setup FFmpeg processes based on export configuration
         if export_video and video_format == "Video":
             if export_audio and not project.export_container.audio_in_separate_file.get_value():
-                # Video with embedded audio using named pipes
-                self.ffmpeg_video_process = self._create_video_audio_process(frame_width, frame_height)
+                # Video with embedded audio - will be handled in two stages
+                pass
             else:
                 # Video only
                 self.ffmpeg_video_process = self._create_video_process(frame_width, frame_height)
@@ -150,43 +142,6 @@ class ExportWorker(QObject):
         # Initialise active entries tracking
         self.active_entries = []
         self.next_entry_index = 0
-
-    def _start_writer_threads(self):
-        """Start video and audio writer threads for concurrent pipe writing"""
-        self.threads_running = True
-        self.video_thread = threading.Thread(target=self._video_writer_thread, daemon=True)
-        self.audio_thread = threading.Thread(target=self._audio_writer_thread, daemon=True)
-        self.video_thread.start()
-        self.audio_thread.start()
-
-    def _video_writer_thread(self):
-        """Thread for writing video data to pipe"""
-        while self.threads_running:
-            self.write_ready.wait()
-            if not self.threads_running:
-                break
-
-            if self.video_data is not None:
-                self.video_pipe_file.write(self.video_data)
-                self.video_data = None
-
-            self.write_done.set()
-
-    def _audio_writer_thread(self):
-        """Thread for writing audio data to pipe"""
-        # Wait for FFmpeg to open audio pipe
-        audio_pipe_file = self.audio_pipe_object.wait()
-
-        while self.threads_running:
-            self.write_ready.wait()
-            if not self.threads_running:
-                break
-
-            if self.audio_data is not None:
-                audio_pipe_file.write(self.audio_data)
-                self.audio_data = None
-
-            self.write_done.set()
 
     def _create_video_process(self, width, height):
         """Create FFmpeg process for video only"""
@@ -214,7 +169,7 @@ class ExportWorker(QObject):
 
         return subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
-    def _create_audio_process(self):
+    def _create_audio_process(self, output_file=None):
         """Create FFmpeg process for audio only"""
         project = self.application_state.project_settings
 
@@ -222,12 +177,13 @@ class ExportWorker(QObject):
         audio_bitrate = project.export_codec.audio_bitrate.get_value()
 
         # Determine output filename
-        if project.export_container.export_video and project.export_container.video_format.get_value() == "Image Sequence":
-            # Audio in image sequence folder
-            output_file = str(Path(project.export_container.file_path) / f"audio.{self._get_audio_extension(audio_codec)}")
-        else:
-            # Standalone audio or separate from video
-            output_file = project.export_container.file_path + f".{self._get_audio_extension(audio_codec)}"
+        if output_file is None:
+            if project.export_container.export_video and project.export_container.video_format.get_value() == "Image Sequence":
+                # Audio in image sequence folder
+                output_file = str(Path(project.export_container.file_path) / f"audio.{self._get_audio_extension(audio_codec)}")
+            else:
+                # Standalone audio or separate from video
+                output_file = project.export_container.file_path + f".{self._get_audio_extension(audio_codec)}"
 
         cmd = [
             'ffmpeg',
@@ -247,8 +203,8 @@ class ExportWorker(QObject):
 
         return subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
-    def _create_video_audio_process(self, width, height):
-        """Create FFmpeg process for video with embedded audio using named pipes"""
+    def _create_video_with_audio_file_process(self, width, height, audio_file):
+        """Create FFmpeg process for video with embedded audio from file"""
         export_codec = self.application_state.project_settings.export_codec
         video_codec = export_codec.video_codec.get_value()
         video_quality = export_codec.video_quality.get_value()
@@ -262,18 +218,15 @@ class ExportWorker(QObject):
         cmd = [
             'ffmpeg',
             '-y',
-            # Video input from named pipe
+            # Video input from stdin
             '-f', 'rawvideo',
             '-vcodec', 'rawvideo',
             '-pix_fmt', 'bgra',
             '-s', f'{width}x{height}',
             '-r', str(self.frame_rate),
-            '-i', self.video_pipe_path,
-            # Audio input from named pipe
-            '-f', 's16le',
-            '-ar', str(self.sample_rate),
-            '-ac', str(self.audio_channels),
-            '-i', self.audio_pipe_path,
+            '-i', '-',
+            # Audio input from file
+            '-i', audio_file,
             # Video encoding
             '-c:v', video_codec,
             '-crf', str(video_quality),
@@ -287,9 +240,10 @@ class ExportWorker(QObject):
 
         cmd.append(output_file)
 
-        return subprocess.Popen(cmd)
+        return subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
-    def _get_audio_extension(self, codec):
+    @staticmethod
+    def _get_audio_extension(codec):
         """Get file extension for audio codec"""
         extensions = {
             'aac': 'm4a',
@@ -299,19 +253,15 @@ class ExportWorker(QObject):
         }
         return extensions.get(codec, 'wav')
 
-    def _process_frames(self):
+    def _process_frames(self, export_video: bool, export_audio: bool):
         """Process all frames from start to end.
         Stops after completing current frame if stop is called"""
         project = self.application_state.project_settings
         frame_width, frame_height = project.export_codec.frame_dimensions.get_value()
-        export_video = project.export_container.export_video.get_value()
-        export_audio = project.export_container.export_audio.get_value()
         video_format = project.export_container.video_format.get_value()
 
         total_frames = self.end_frame - self.start_frame
         padding_width = len(str(total_frames))
-
-        using_threaded_pipes = self.threads_running
 
         for current_frame in range(self.start_frame, self.end_frame):
             if self.should_stop:
@@ -324,24 +274,17 @@ class ExportWorker(QObject):
             if export_video:
                 frame_buffer = QImage(frame_width, frame_height, QImage.Format.Format_ARGB32)
                 frame_buffer = self.timeline.render_frame(current_frame, frame_buffer=frame_buffer,
-                                           override_visible_entries=[i for i, entry in self.active_entries if entry.timeline_object.can_play_video])
+                                                          override_visible_entries=[i for i, entry in self.active_entries if entry.timeline_object.can_play_video])
 
-                # Update shared frame if lock is available
-                if self.frame_lock.acquire(blocking=False):
-                    self.latest_frame = frame_buffer
-                    self.latest_frame_id = current_frame
-                    self.frame_lock.release()
+                # Update shared frame
+                self.latest_frame = frame_buffer
+                self.latest_frame_id = current_frame
 
                 frame_data = frame_buffer.bits().asarray(frame_buffer.sizeInBytes())
 
                 # Write frame to appropriate output
                 if video_format == "Video":
-                    if using_threaded_pipes:
-                        self.video_data = bytes(frame_data)
-                    elif self.video_pipe_file:
-                        self.video_pipe_file.write(frame_data)
-                    else:
-                        self.ffmpeg_video_process.stdin.write(frame_data)
+                    self.ffmpeg_video_process.stdin.write(frame_data)
                 else:
                     # Save as individual image
                     frame_filename = f"{current_frame:0{padding_width}d}.{project.export_container.image_format.get_value()}"
@@ -358,31 +301,10 @@ class ExportWorker(QObject):
                 audio_data = audio_data.T
                 audio_bytes = audio_data.tobytes()
 
-                if using_threaded_pipes:
-                    self.audio_data = audio_bytes
-                elif self.ffmpeg_audio_process:
-                    self.ffmpeg_audio_process.stdin.write(audio_bytes)
-
-            # Trigger concurrent writes for threaded pipes
-            if using_threaded_pipes:
-                self.write_done.clear()
-                self.write_ready.set()
-                self.write_done.wait()
-                self.write_done.wait()
-                self.write_ready.clear()
+                self.ffmpeg_audio_process.stdin.write(audio_bytes)
 
     def _cleanup_processes(self):
         """Close FFmpeg processes and wait for completion"""
-        # Stop writer threads
-        if self.threads_running:
-            self.threads_running = False
-            self.write_ready.set()
-            if self.video_thread:
-                self.video_thread.join(timeout=2)
-            if self.audio_thread:
-                self.audio_thread.join(timeout=2)
-
-        # Close FFmpeg processes
         for process in [self.ffmpeg_video_process, self.ffmpeg_audio_process]:
             if process:
                 try:
@@ -395,10 +317,6 @@ class ExportWorker(QObject):
 
         self.ffmpeg_video_process = None
         self.ffmpeg_audio_process = None
-        self.video_pipe_path = None
-        self.audio_pipe_path = None
-        self.video_pipe_file = None
-        self.audio_pipe_object = None
 
     def _update_active_entries(self, current_frame, end_frame):
         """Update active entries list based on current frame position"""
@@ -584,10 +502,8 @@ class ExportEngine(QObject):
             return
 
         # Pull latest frame from worker
-        self.worker.frame_lock.acquire()
         latest_frame = self.worker.latest_frame
         latest_frame_id = self.worker.latest_frame_id
-        self.worker.frame_lock.release()
 
         if latest_frame is None:
             return
