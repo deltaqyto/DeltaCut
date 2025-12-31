@@ -223,12 +223,10 @@ class TimelineObject:
             frame_scale_factor: Scaling of widget pixels to frame pixels
         """
         # If not visible on viewport, do not render overlays
-        if not self.can_play_video:
+        if not self.can_play_video or not self.ui_is_selected or self.application_state.is_timeline_locked:
             return
         # If there is no bounding rectangle or transform, do not render
         if self.viewport_overlay_bounding_rect is None or self.viewport_transform is None:
-            return
-        if not self.ui_is_selected:
             return
 
         # Define the rotation center as the center of the object
@@ -606,7 +604,7 @@ class TimelineObject:
 
         return need_update, False
 
-    def viewport_mouse_release(self, mouse_pos: QPointF) -> bool:
+    def viewport_mouse_release(self) -> bool:
         """Returns if an update is required for the viewport frame"""
         self.is_dragging_corner = False
         self.is_dragging_edge = False

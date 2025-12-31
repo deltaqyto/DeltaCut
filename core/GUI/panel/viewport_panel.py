@@ -18,6 +18,7 @@ class ViewportPanel(BasePanel):
 
         self.project.application_state.signal_frame_buffer_update.connect(self.handle_frame_update)
         self.project.application_state.signal_entry_selection_update.connect(self.handle_entry_selection_update)
+        self.project.application_state.signal_timeline_lock_update.connect(self.handle_timeline_lock_update)
 
         self.current_frame = self.project.application_state.rendered_frame.visual_frame
         self.frame_to_widget: QTransform = QTransform()  # Frame to widget transform
@@ -46,6 +47,11 @@ class ViewportPanel(BasePanel):
     def handle_entry_selection_update(self):
         """Called when the selection status of the entries change"""
         self.update()
+
+    @pyqtSlot()
+    def handle_timeline_lock_update(self):
+        """Called when the lock status of the timeline changes"""
+        self.stop_mouse_action()
 
     def paintEvent(self, event: QPaintEvent):
         """Draw the frame. Keep aspect ratio"""
@@ -110,6 +116,9 @@ class ViewportPanel(BasePanel):
 
     def mousePressEvent(self, event: QMouseEvent):
         """Work out which entry should be activated and pass it forward"""
+        if self.project.application_state.is_timeline_locked:
+            event.ignore()
+            return
         inverted, invertible = self.frame_to_widget.inverted()
         if not invertible:
             event.ignore()
@@ -121,7 +130,8 @@ class ViewportPanel(BasePanel):
         clicked_entry = None
         selected_entry = self.project.application_state.selected_entry
 
-        if selected_entry is not None and selected_entry.timeline_object.check_viewport_mouse_collision(frame_mouse_pos, self.frame_scale_factor):
+        if (selected_entry is not None and selected_entry in self.project.application_state.rendered_entries and
+                selected_entry.timeline_object.check_viewport_mouse_collision(frame_mouse_pos, self.frame_scale_factor)):
             clicked_entry = selected_entry
         else:
             for entry in self.project.application_state.rendered_entries[::-1]:
@@ -131,6 +141,10 @@ class ViewportPanel(BasePanel):
 
         # Update selections
         changed_selection = False
+        if selected_entry is not clicked_entry and selected_entry is not None:
+            changed_selection = True
+            selected_entry.timeline_object.ui_is_selected = False
+
         for entry in self.project.application_state.rendered_entries:
             should_be_selected = (entry == clicked_entry)
             if entry.timeline_object.ui_is_selected != should_be_selected:
@@ -152,21 +166,22 @@ class ViewportPanel(BasePanel):
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         """Pass to selected entry"""
-        inverted, invertible = self.frame_to_widget.inverted()
-        if not invertible:
+        if self.project.application_state.is_timeline_locked:
             event.ignore()
             return
 
-        frame_mouse_pos = inverted.map(event.position())
         if self.project.application_state.selected_entry is not None:
             selected_entry = self.project.application_state.selected_entry
-            if selected_entry.timeline_object.viewport_mouse_release(frame_mouse_pos):
+            if selected_entry.timeline_object.viewport_mouse_release():
                 self.update()
 
         event.ignore()
 
     def mouseMoveEvent(self, event: QMouseEvent):
         """Pass to selected entry"""
+        if self.project.application_state.is_timeline_locked:
+            event.ignore()
+            return
         inverted, invertible = self.frame_to_widget.inverted()
         if not invertible:
             event.ignore()
@@ -232,3 +247,10 @@ class ViewportPanel(BasePanel):
         origin_widget = self.frame_to_widget.map(QPointF(0, 0))
         unit_widget = self.frame_to_widget.map(QPointF(1, 0))
         self.frame_scale_factor = ((unit_widget.x() - origin_widget.x()) ** 2 + (unit_widget.y() - origin_widget.y()) ** 2) ** 0.5
+
+    def stop_mouse_action(self):
+        """Release and halt mouse actions"""
+        if self.project.application_state.selected_entry is not None:
+            selected_entry = self.project.application_state.selected_entry
+            if selected_entry.timeline_object.viewport_mouse_release():
+                self.update()
