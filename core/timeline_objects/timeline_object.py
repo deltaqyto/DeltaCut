@@ -46,7 +46,7 @@ class TimelineObject:
         self.bounding_box_outline = Qt.GlobalColor.white
 
         self.handle_size = 5  # px radius of the transform handles
-        self.rotation_handle_length = 30  # px distance from bounding box to rotation handle
+        self.rotation_handle_length = 50  # px distance from bounding box to rotation handle
         self.rotation_center_handle_size = 8  # px radius of the rotation center handle
         self.handle_snap_distance = 10  # px distance to snap the frame handle to an axis
         self.guide_cross_size = 5  # px radius of the guidance crosses
@@ -250,8 +250,13 @@ class TimelineObject:
         bottom_mid = QPointF(rect.width() / 2, rect.height())
         left_mid = QPointF(0, rect.height() / 2)
 
-        # Calculate rotation handle position in object space (extending upward from top edge)
-        rotate_handle = QPointF(self.rotation_center.x(), self.rotation_center.y() - self.rotation_handle_length)
+        # Calculate rotation handle position in object space
+        test_point = QPointF(self.rotation_center.x(), self.rotation_center.y() - 1)
+        rotation_center_frame = self.viewport_transform.map(self.rotation_center)
+        test_point_frame = self.viewport_transform.map(test_point)
+        scale_factor = math.sqrt((test_point_frame.x() - rotation_center_frame.x()) ** 2 +
+                                 (test_point_frame.y() - rotation_center_frame.y()) ** 2)
+        rotate_handle = QPointF(self.rotation_center.x(), self.rotation_center.y() - self.rotation_handle_length / scale_factor / frame_scale_factor)
 
         # Store handles in object space
         self.handle_locations = [corners[0], corners[1], corners[2], corners[3], top_mid, right_mid, bottom_mid, left_mid, rotate_handle]
