@@ -1,17 +1,19 @@
+from core.resources.resources import BaseResource
 from core.resources.audio_resource import AudioResource
 from core.resources.image_resource import ImageResource
-from core.resources.resources import BaseResource
+from core.resources.transcript_resource import TranscriptResource
 
 RESOURCES_TYPE_REGISTRY = {'BaseResource': BaseResource,
                            'AudioResource': AudioResource,
-                           'ImageResource': ImageResource}
+                           'ImageResource': ImageResource,
+                           'TranscriptResource': TranscriptResource}
 
 # Guaranteed to contain no duplicate file types
 RESOURCES_FILE_TYPE_REGISTRY = {
     'AudioResource': ['*.wav', '*.mp3', '*.flac', '*.ogg', '*.aac', '*.m4a', '*.wma', '*.opus'],
     'ImageResource': ['*.png', '*.jpg', '*.jpeg', '*.webp', '*.bmp', '*.tiff'],
-    'VideoResource': ['*.mp4', '*.avi', '*.mov', '*.mkv', '*.webm', '*.flv', '*.wmv', '*.m4v', '*.mpeg', '*.mpg']
-
+    'VideoResource': ['*.mp4', '*.avi', '*.mov', '*.mkv', '*.webm', '*.flv', '*.wmv', '*.m4v', '*.mpeg', '*.mpg'],
+    'TranscriptResource': ['*.txt', '*.json'],
 }
 
 def get_resource_type_from_file_type(file_type):
