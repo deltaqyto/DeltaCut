@@ -2,7 +2,7 @@ from math import ceil, floor
 from time import time
 
 from PyQt6.QtCore import QRect, QLineF, QPointF, QPoint, pyqtSlot, Qt
-from PyQt6.QtGui import QPaintEvent, QPainter, QColor, QResizeEvent, QMouseEvent
+from PyQt6.QtGui import QPaintEvent, QPainter, QColor, QResizeEvent, QMouseEvent, QKeyEvent
 from PyQt6.QtWidgets import QApplication
 
 from core.GUI.panel.base_panel import BasePanel
@@ -17,6 +17,7 @@ class TimelinePanel(BasePanel):
     def __init__(self, parent, project: Project):
         super().__init__(parent, project)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self.panel_type: str = 'TimelinePanel'
         self.project: Project = project
@@ -57,6 +58,7 @@ class TimelinePanel(BasePanel):
         self.handle_snap_frames: list[int] = []  # List of frames which the currently selected handle can snap to
 
         # Hover state tracking
+        self.has_mouse = False  # Whether the mouse is hovered on the widget
         self.hover_entry: TimelineEntry | None = None  # What entry is the mouse currently over
         self.hover_handle: str | None = None  # 'left', 'right', 'body'
         self.hover_playhead: bool = False  # Is the mouse currently over the playhead
@@ -64,6 +66,7 @@ class TimelinePanel(BasePanel):
         self.visible_objects: list[TimelineEntry] = []
         self.timeline_object_rects: list[QRect] = []  # Bounding boxes, matches 1:1 with self.visible objects
         self.handle_timeline_content_update()
+        self.clearFocus()
 
     @pyqtSlot()
     def handle_timeline_content_update(self):
@@ -91,6 +94,29 @@ class TimelinePanel(BasePanel):
         """Called when the selection status of the entries change"""
         self.selected_timeline_entry = self.project.application_state.selected_entry
         self.update()
+
+    def enterEvent(self, event):
+        self.setFocus()
+        self.has_mouse = True
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.clearFocus()
+        self.has_mouse = False
+        super().leaveEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if not self.project.application_state.is_timeline_locked and self.has_mouse:
+            if event.key() == Qt.Key.Key_Left:
+                self.project.application_state.current_playback_frame -= 1
+                self.project.application_state.signal_frame_number_update.emit()
+                self.project.render_current_frame_to_buffer()
+            elif event.key() == Qt.Key.Key_Right:
+                self.project.application_state.current_playback_frame += 1
+                self.project.application_state.signal_frame_number_update.emit()
+                self.project.render_current_frame_to_buffer()
+
+        super().keyPressEvent(event)
 
     def update_timeline_object_rects(self):
         """Compute timeline object bounding rectangles"""
