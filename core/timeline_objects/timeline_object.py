@@ -49,6 +49,8 @@ class TimelineObject:
         self.rotation_handle_length = 30  # px distance from bounding box to rotation handle
         self.rotation_center_handle_size = 8  # px radius of the rotation center handle
         self.handle_snap_distance = 10  # px distance to snap the frame handle to an axis
+        self.guide_cross_size = 5  # px radius of the guidance crosses
+        self.guide_cross_color = QColor('red')  # color to draw guidance crosses
 
         # Mouse state variables
         self.handle_locations: list[QPointF] = [QPointF(), QPointF(), QPointF(), QPointF(),  # top left, top right, bottom right, bottom left
@@ -259,10 +261,48 @@ class TimelineObject:
         top_right = self.viewport_transform.map(corners[1])
         bottom_right = self.viewport_transform.map(corners[2])
         bottom_left = self.viewport_transform.map(corners[3])
-
-        # Transform midpoints to widget space for drawing
-        top_mid_widget = self.viewport_transform.map(top_mid)
         rotate_handle_widget = self.viewport_transform.map(rotate_handle)
+
+        # Draw previous location
+        if self.is_dragging_corner or self.is_dragging_edge or self.is_dragging_rotate or self.is_dragging_center or self.is_dragging_transform:
+            old_corners = [
+                self.drag_start_transform.map(corners[0]),
+                self.drag_start_transform.map(corners[1]),
+                self.drag_start_transform.map(corners[2]),
+                self.drag_start_transform.map(corners[3])
+            ]
+            painter.setPen(QPen(self.guide_cross_color, 1, Qt.PenStyle.DotLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            old_polygon = QPolygonF(old_corners)
+            painter.drawPolygon(old_polygon)
+
+        # Draw guide points
+        if self.is_dragging_center:
+            half_cross = self.guide_cross_size / (2 * frame_scale_factor)
+
+            # Draw old center of rotation
+            old_center_widget = self.drag_start_transform.map(self.handle_start_position)
+            painter.setPen(self.guide_cross_color)
+            painter.drawLine(
+                QPointF(old_center_widget.x() - half_cross, old_center_widget.y() - half_cross),
+                QPointF(old_center_widget.x() + half_cross, old_center_widget.y() + half_cross)
+            )
+            painter.drawLine(
+                QPointF(old_center_widget.x() - half_cross, old_center_widget.y() + half_cross),
+                QPointF(old_center_widget.x() + half_cross, old_center_widget.y() - half_cross)
+            )
+
+            # Draw center of object
+            object_center = QPointF(rect.width() / 2, rect.height() / 2)
+            object_center_widget = self.drag_start_transform.map(object_center)
+            painter.drawLine(
+                QPointF(object_center_widget.x() - half_cross, object_center_widget.y() - half_cross),
+                QPointF(object_center_widget.x() + half_cross, object_center_widget.y() + half_cross)
+            )
+            painter.drawLine(
+                QPointF(object_center_widget.x() - half_cross, object_center_widget.y() + half_cross),
+                QPointF(object_center_widget.x() + half_cross, object_center_widget.y() - half_cross)
+            )
 
         # Draw bounding box
         painter.setPen(QPen(self.bounding_box_outline, 1))
@@ -568,7 +608,7 @@ class TimelineObject:
         self.is_dragging_rotate = False
         self.is_dragging_center = False
         self.is_dragging_transform = False
-        return False
+        return True
 
     def compute_corner_transform(self, mouse_framebuffer_pos: QPointF, drag_start_transform: QTransform, handle_start_position: QPointF, enable_centering: bool = False) -> QTransform:
         """Compute new transform when dragging a corner handle.
