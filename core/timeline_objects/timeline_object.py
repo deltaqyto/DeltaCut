@@ -48,6 +48,7 @@ class TimelineObject:
         self.handle_size = 5  # px radius of the transform handles
         self.rotation_handle_length = 30  # px distance from bounding box to rotation handle
         self.rotation_center_handle_size = 8  # px radius of the rotation center handle
+        self.handle_snap_distance = 10  # px distance to snap the frame handle to an axis
 
         # Mouse state variables
         self.handle_locations: list[QPointF] = [QPointF(), QPointF(), QPointF(), QPointF(),  # top left, top right, bottom right, bottom left
@@ -248,7 +249,7 @@ class TimelineObject:
         left_mid = QPointF(0, rect.height() / 2)
 
         # Calculate rotation handle position in object space (extending upward from top edge)
-        rotate_handle = QPointF(rect.width() / 2, -self.rotation_handle_length)
+        rotate_handle = QPointF(self.rotation_center.x(), self.rotation_center.y() - self.rotation_handle_length)
 
         # Store handles in object space
         self.handle_locations = [corners[0], corners[1], corners[2], corners[3], top_mid, right_mid, bottom_mid, left_mid, rotate_handle]
@@ -270,7 +271,8 @@ class TimelineObject:
         painter.drawPolygon(polygon)
 
         # Draw line from top midpoint to rotation handle
-        painter.drawLine(top_mid_widget, rotate_handle_widget)
+        rotation_center_widget = self.viewport_transform.map(self.rotation_center)
+        painter.drawLine(rotation_center_widget, rotate_handle_widget)
 
         # Draw handles
         scaled_handle = self.handle_size / frame_scale_factor
@@ -285,7 +287,6 @@ class TimelineObject:
 
         # Draw the rotation center handle
         scaled_handle = self.rotation_center_handle_size / frame_scale_factor
-        rotation_center_widget = self.viewport_transform.map(self.rotation_center)
         painter.setPen(QPen(self.handle_fill, 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
@@ -373,17 +374,22 @@ class TimelineObject:
             self.is_dragging_corner = True
             self.handle_start_position = self.handle_locations[self.selected_handle]
             self.drag_anchor = {0: 2, 1: 3, 2: 0, 3: 1}[self.selected_handle]  # Diagonally opposite handle is the anchor
-            self.drag_axis = ""  # Unnecessary for this task
         elif self.selected_handle in [4, 5, 6, 7]:  # Edge handle
             self.is_dragging_edge = True
             self.handle_start_position = self.handle_locations[self.selected_handle]
             self.drag_anchor = {4: 6, 5: 7, 6: 4, 7: 5}[self.selected_handle]  # Directly opposite handle is the anchor
             self.drag_axis = {4: 'y', 5: 'x', 6: 'y', 7: 'x'}[self.selected_handle]
-        elif self.selected_handle == 8:  # Rotation handle
+        elif self.selected_handle == 8 and self.rotation_center is not None:  # Rotation handle
             self.is_dragging_rotate = True
             self.handle_start_position = self.handle_locations[self.selected_handle]
+            centre_fb = self.drag_start_transform.map(self.rotation_center)
+            handle_fb = self.viewport_transform.map(self.handle_start_position)
+            self.drag_axis = math.degrees(math.atan2(handle_fb.y() - centre_fb.y(),
+                                                     handle_fb.x() - centre_fb.x()))  # Store the starting angle in the drag axis
+            self.drag_axis += 360 if self.drag_axis < 0 else 0
         elif rotation_center_collision:  # Rotation center
             self.is_dragging_center = True
+            self.handle_start_position = self.rotation_center
         else:  # Translation
             self.is_dragging_transform = True
             self.handle_start_position = mouse_pos  # Store the mouse position to compute the offset later
@@ -392,27 +398,148 @@ class TimelineObject:
 
     def viewport_mouse_move(self, mouse_pos: QPointF, frame_scale_factor: float) -> tuple[bool, bool]:
         """Returns if an update is required for the viewport frame, if a re-render of the framebuffer is required"""
-        enable_centering = QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier  # Apply centering where viable
+        
+        enable_snap =  not QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier  # Apply snap locations
+        enable_clamping = QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier  # Apply additional restrictions
         enable_centering = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)  # Apply centering where viable
-        if self.is_dragging_corner:
-            self.viewport_transform = self.compute_corner_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
-            self.viewport_transform = self.compute_corner_transform(mouse_pos, self.drag_start_transform, self.handle_start_position, enable_centering)
+
+        processed_mouse_pos = mouse_pos
+        frame_size = QPointF(self.application_state.rendered_frame.visual_frame.width(),
+                             self.application_state.rendered_frame.visual_frame.height())
+
+        if self.is_dragging_corner:  # Corner handles
+            snap_points = [QPointF(0, 0), self.drag_start_transform.map(self.handle_start_position), frame_size]
+            if enable_clamping:
+                anchor_fb = self.drag_start_transform.map(self.handle_locations[self.drag_anchor])
+                handle_fb = self.drag_start_transform.map(self.handle_start_position)
+
+                direction = handle_fb - anchor_fb
+                to_mouse = processed_mouse_pos - anchor_fb
+                t = (to_mouse.x() * direction.x() + to_mouse.y() * direction.y()) / (direction.x() * direction.x() + direction.y() * direction.y())
+                processed_mouse_pos = anchor_fb + direction * t
+
+                if enable_snap:  # Snap along axis, instead of free-form snapping
+                    processed_mouse_pos, _ = self.snap_point_to_line_axes(anchor_fb, processed_mouse_pos, self.handle_snap_distance / frame_scale_factor, snap_points)
+            elif enable_snap:
+                processed_mouse_pos, _ = self.snap_point_to_point_axes(processed_mouse_pos, self.handle_snap_distance / frame_scale_factor, snap_points)
+
+            self.viewport_transform = self.compute_corner_transform(processed_mouse_pos, self.drag_start_transform, self.handle_start_position, enable_centering)
             return True, True
-        elif self.is_dragging_edge:
-            self.viewport_transform = self.compute_edge_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
-            self.viewport_transform = self.compute_edge_transform(mouse_pos, self.drag_start_transform, self.handle_start_position, enable_centering)
+
+        elif self.is_dragging_edge:  # Edge handles
+            if enable_snap:
+                processed_mouse_pos, _ = self.snap_point_to_point_axes(processed_mouse_pos, self.handle_snap_distance / frame_scale_factor,
+                                                            [QPointF(0, 0), self.drag_start_transform.map(self.handle_start_position), frame_size])
+
+            self.viewport_transform = self.compute_edge_transform(processed_mouse_pos, self.drag_start_transform, self.handle_start_position, enable_centering)
             return True, True
-        elif self.is_dragging_rotate:
-            self.viewport_transform = self.compute_rotation_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
+
+        elif self.is_dragging_rotate:  # Rotation handle
+            snap_angles = [0, 90, 180, 270, self.drag_axis]  # 90 deg increments, original angle
+            if enable_clamping:
+                snap_angles += [45, 135, 225, 315, 30, 60, 120, 150, 210, 240, 300, 330] # 45 deg increments, 30 and 60 increments
+            if enable_snap:
+                centre_fb = self.drag_start_transform.map(self.rotation_center)
+                current_angle = math.degrees(math.atan2(processed_mouse_pos.y() - centre_fb.y(),
+                                                        processed_mouse_pos.x() - centre_fb.x()))
+                current_angle += 360 if current_angle < 0 else 0
+                nearest_angle = current_angle
+                nearest_angle_distance = float('inf')
+                for angle in snap_angles:
+                    if abs(angle - current_angle) < nearest_angle_distance:
+                        nearest_angle = angle
+                        nearest_angle_distance = abs(angle - current_angle)
+
+                angle_rad = math.radians(nearest_angle)
+                direction = QPointF(math.cos(angle_rad), math.sin(angle_rad))
+                point_vector = processed_mouse_pos - centre_fb
+
+                projection_length = point_vector.x() * direction.x() + point_vector.y() * direction.y()
+                projected_point = centre_fb + direction * projection_length
+
+                distance = math.sqrt(
+                    (processed_mouse_pos.x() - projected_point.x()) ** 2 +
+                    (processed_mouse_pos.y() - projected_point.y()) ** 2
+                )
+
+                if distance < self.handle_snap_distance / frame_scale_factor:
+                    processed_mouse_pos = projected_point
+
+            self.viewport_transform = self.compute_rotation_transform(processed_mouse_pos, self.drag_start_transform, self.handle_start_position)
             return True, True
-        elif self.is_dragging_center:
+
+        elif self.is_dragging_center:  # Rotation center handle
+            if enable_snap:
+                width = self.viewport_overlay_bounding_rect.width()
+                height = self.viewport_overlay_bounding_rect.height()
+                processed_mouse_pos, _ = self.snap_point_to_point_axes(processed_mouse_pos, self.handle_snap_distance / frame_scale_factor,
+                                                                       [QPointF(0, 0), frame_size, self.drag_start_transform.map(self.handle_start_position), # Frame bounds, old position
+                                                                        self.drag_start_transform.map(QPointF(0, 0)), self.drag_start_transform.map(QPointF(width, height)),  # Object bounds
+                                                                        self.drag_start_transform.map(QPointF(width/2, height/2))])  # Object center
+
             # Transform mouse position from framebuffer to object space
             inverted, invertible = self.drag_start_transform.inverted()
             if invertible:
-                self.rotation_center = inverted.map(mouse_pos)
+                self.rotation_center = inverted.map(processed_mouse_pos)
             return True, True
-        elif self.is_dragging_transform:
-            self.viewport_transform = self.compute_translation_transform(mouse_pos, self.drag_start_transform, self.handle_start_position)
+
+        elif self.is_dragging_transform:  # No handle, is dragging object
+            if enable_snap:
+                width = self.viewport_overlay_bounding_rect.width()
+                height = self.viewport_overlay_bounding_rect.height()
+
+                # Get 4 corners in object space
+                corners = [
+                    QPointF(0, 0),
+                    QPointF(width, 0),
+                    QPointF(width, height),
+                    QPointF(0, height)
+                ]
+
+                # Calculate current translation offset
+                translation_offset = processed_mouse_pos - self.handle_start_position
+
+                # Snap points
+                snap_points = [
+                    QPointF(0, 0),
+                    QPointF(frame_size.x(), frame_size.y())
+                ]
+
+                # Find corner with smallest snap correction
+                best_x_correction = None
+                best_y_correction = None
+                best_x_distance = float('inf')
+                best_y_distance = float('inf')
+
+                for corner in corners:
+                    current_corner_fb = self.drag_start_transform.map(corner)
+                    projected_corner_fb = current_corner_fb + translation_offset
+
+                    snapped_corner, distances = self.snap_point_to_point_axes(
+                        projected_corner_fb,
+                        self.handle_snap_distance / frame_scale_factor,
+                        snap_points + [current_corner_fb]
+                    )
+
+                    correction = snapped_corner - projected_corner_fb
+
+                    # Track best x-axis snap
+                    if distances[0] < best_x_distance:
+                        best_x_distance = distances[0]
+                        best_x_correction = correction.x()
+
+                    # Track best y-axis snap
+                    if distances[1] < best_y_distance:
+                        best_y_distance = distances[1]
+                        best_y_correction = correction.y()
+
+                # Apply both corrections
+                if best_x_correction is not None:
+                    processed_mouse_pos += QPointF(best_x_correction, 0)
+                if best_y_correction is not None:
+                    processed_mouse_pos += QPointF(0, best_y_correction)
+
+            self.viewport_transform = self.compute_translation_transform(processed_mouse_pos, self.drag_start_transform, self.handle_start_position)
             return True, True
 
         # Check for hover updates
@@ -595,3 +722,48 @@ class TimelineObject:
         translation.translate(dx, dy)
 
         return drag_start_transform * translation
+
+    @staticmethod
+    def snap_point_to_point_axes(base_point: QPointF, snap_distance: float, snap_points: list[QPointF], override_distances: tuple[float, float] = None):
+        """Snap a target point along the x-y axes of the provided point list."""
+        snapped_x = base_point.x()
+        snapped_y = base_point.y()
+        x_distance = float('inf') if override_distances is None else override_distances[0]
+        y_distance = float('inf') if override_distances is None else override_distances[1]
+        for point in snap_points:
+            if abs(snapped_x - point.x()) < min(snap_distance, x_distance):
+                snapped_x = point.x()
+                x_distance = abs(snapped_x - point.x())
+            if abs(snapped_y - point.y()) < min(snap_distance, y_distance):
+                snapped_y = point.y()
+                y_distance = abs(snapped_y - point.y())
+        return QPointF(snapped_x, snapped_y), (x_distance, y_distance)
+
+    @staticmethod
+    def snap_point_to_line_axes(anchor: QPointF, clamped_point: QPointF, snap_distance: float, snap_points: list[QPointF]):
+        """Snap along a line by intersecting with x-y axes through snap points."""
+        direction = clamped_point - anchor
+
+        best_snap = clamped_point
+        best_distance = float('inf')
+
+        for point in snap_points:
+            # Vertical line through snap point
+            if abs(direction.x()) > 1e-6:
+                t = (point.x() - anchor.x()) / direction.x()
+                intersection = anchor + direction * t
+                dist = abs(clamped_point.y() - intersection.y())
+                if dist < min(snap_distance, best_distance):
+                    best_snap = intersection
+                    best_distance = dist
+
+            # Horizontal line through snap point
+            if abs(direction.y()) > 1e-6:
+                t = (point.y() - anchor.y()) / direction.y()
+                intersection = anchor + direction * t
+                dist = abs(clamped_point.x() - intersection.x())
+                if dist < min(snap_distance, best_distance):
+                    best_snap = intersection
+                    best_distance = dist
+
+        return best_snap, best_distance
