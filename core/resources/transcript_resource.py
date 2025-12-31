@@ -7,13 +7,14 @@ from core.resources.resources import BaseResource, BaseReadHead
 class TranscriptResource(BaseResource):
     """Resource for transcripts.
     Transcript stored as time and text lists, both sorted by time. Time is represented as frames from the start of the resource
+    Text is pairs of speaker, text.
     """
 
     def __init__(self, path=None, skip_loading_resource=False, resource_id=None, serialised_data=None):
-        self.transcripts: list[str] = []
+        self.transcripts: list[tuple[str, str]] = []
         self.timestamps: list[int] = []
         super().__init__(path, skip_loading_resource, resource_id, serialised_data)
-        if not self.transcripts:
+        if self.path is not None:
             self._load()
 
     def _load(self, override_data=None):
@@ -29,12 +30,13 @@ class TranscriptResource(BaseResource):
         assert 'timestamps' in data, "Missing 'timestamps' key in JSON data"
 
         assert isinstance(data['transcripts'], list), "transcripts must be a list"
-        assert all(isinstance(t, str) for t in data['transcripts']), "All transcripts must be strings"
+        assert all(isinstance(t, (list, tuple)) and len(t) == 2 for t in data['transcripts']), "All transcripts must be pairs"
+        assert all(isinstance(t[0], str) and isinstance(t[1], str) for t in data['transcripts']), "All transcript pairs must be (str, str)"
 
         assert isinstance(data['timestamps'], list), "timestamps must be a list"
         assert all(isinstance(t, int) for t in data['timestamps']), "All timestamps must be integers"
 
-        self.transcripts = data['transcripts']
+        self.transcripts = [tuple(t) for t in data['transcripts']]
         self.timestamps = data['timestamps']
 
         assert len(self.transcripts) == len(self.timestamps), f"Transcript Resource: transcripts ({len(self.transcripts)}) != timestamps ({len(self.timestamps)})"
