@@ -215,7 +215,7 @@ class TimelinePanel(BasePanel):
         if selection_has_changed:
             self.project.application_state.selected_entry = self.selected_timeline_entry
             self.project.application_state.signal_entry_selection_update.emit()
-            self.compute_snap_frames()
+        self.compute_snap_frames()
 
         event.ignore()
 
