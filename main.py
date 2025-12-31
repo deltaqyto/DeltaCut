@@ -10,6 +10,7 @@ from core.project.project import Project
 # Temp includes
 from core.resources.audio_resource import AudioResource
 from core.resources.image_resource import ImageResource
+from core.resources.transcript_resource import TranscriptResource
 from core.timeline_objects.media_timeline_object import AudioMediaTimelineObject
 from core.timeline_objects.image_media_timeline_object import ImageMediaTimelineObject
 
@@ -22,10 +23,21 @@ def main():
     audio_resource_1 = AudioResource(str(Path("testing_resources") / "test01_20s.wav"))
     image_resource_1 = ImageResource(str(Path(r"testing_resources") / "river_rock.jpg"))
     image_resource_2 = ImageResource(str(Path(r"testing_resources") / "cheetahs_ahmed_galal.jpg"))
+    transcript_resource = TranscriptResource(None, skip_loading_resource=True)
+    transcripts = [('Jane', 'Roll'),  ('Jane', 'Click'),  ('Jane', 'Shot'),  ('Jane', 'Who will I be today'),  ('Jane', 'or not'),
+                   ('Dylan', 'But such a tide has moving'),  ('Dylan', 'seems asleep'),  ('Dylan', 'too full for sound and foam'),
+                   ('Mike', 'When that which drew from out the boundless deep'),  ('Mike', 'turns again home'),  ('Mike', 'twilight and evening bell and after that')]
+    timestamps = [0, 20, 35, 55, 95,
+                  116, 167, 200,
+                  260, 345, 383]
+    transcript_resource.transcripts = transcripts
+    transcript_resource.timestamps = timestamps
+
 
     application_state.resource_manager.add_resource(audio_resource_1)
     application_state.resource_manager.add_resource(image_resource_1)
     application_state.resource_manager.add_resource(image_resource_2)
+    application_state.resource_manager.add_resource(transcript_resource)
 
     # Temporarily hardcode export settings
     application_state.project_settings.export_container.file_path = str(Path("debug") / "output")
@@ -40,11 +52,17 @@ def main():
     project.timeline.add_entry(0, 2, ImageMediaTimelineObject(application_state, 'River', None, image_resource_1, 200))
     project.timeline.add_entry(200, 2, ImageMediaTimelineObject(application_state, 'Cheetah', None, image_resource_2, 100))
 
+    project.save_to_file(str(Path("debug") / "demo_file.deltacut"))
+
     project2 = Project(ApplicationState())
     project_serial = project.serialise()
     project2.deserialise(project_serial)
     project2_serial = project2.serialise()
     assert project_serial == project2_serial
+    project2.load_from_file(str(Path("debug") / "demo_file.deltacut"))
+    assert project_serial == project2_serial
+    assert transcript_resource.transcripts == transcripts
+    assert transcript_resource.timestamps == timestamps
 
     project2.set_application_state(application_state)  # Application state must be persisted between reserialisation
     window = ApplicationWindow(None, app, project2)
