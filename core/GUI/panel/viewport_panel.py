@@ -192,8 +192,7 @@ class ViewportPanel(BasePanel):
             selected_entry = self.project.application_state.selected_entry
             update, re_render = selected_entry.timeline_object.viewport_mouse_move(frame_mouse_pos, self.frame_scale_factor)
             if re_render:
-                self.project.application_state.rendered_frame.visual_frame = self.project.timeline.render_frame(self.project.application_state.current_playback_frame)
-                self.project.application_state.signal_frame_buffer_update.emit()
+                self.project.render_current_frame_to_buffer()
             if update:
                 self.update()
 

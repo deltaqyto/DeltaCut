@@ -139,5 +139,6 @@ class Project:
         return resource_instance
 
     def render_current_frame_to_buffer(self):
+        """Wrapper for render_frame that automatically writes result to framebuffer and signals appropriate sources"""
         self.application_state.rendered_frame.visual_frame = self.timeline.render_frame(self.application_state.current_playback_frame)
         self.application_state.signal_frame_buffer_update.emit()
