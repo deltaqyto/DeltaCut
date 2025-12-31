@@ -75,9 +75,8 @@ class BaseResource:
         if serialised_data is not None:
             self.deserialise_resource(serialised_data)
 
-        assert self.path is not None, f'Resource cannot have a None path'
-
         if not self.skip_loading:
+            assert self.path is not None, f'Resource cannot have a None path'
             self._load()
 
     def _load(self):
