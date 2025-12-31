@@ -1,5 +1,5 @@
-from PyQt6.QtCore import QRect, pyqtSlot
-from PyQt6.QtGui import QPaintEvent, QPainter, QColor
+from PyQt6.QtCore import QRect, pyqtSlot, QPointF
+from PyQt6.QtGui import QPaintEvent, QPainter, QColor, QTransform, QResizeEvent, QMouseEvent
 
 from core.GUI.panel.base_panel import BasePanel
 
@@ -12,11 +12,18 @@ class ViewportPanel(BasePanel):
 
     def __init__(self, parent, project: Project):
         super().__init__(parent, project)
+        self.setMouseTracking(True)
+
         self.draw_transparency_indicator = False  # TODO make this an accessible setting
 
         self.project.application_state.signal_frame_buffer_update.connect(self.handle_frame_update)
+        self.project.application_state.signal_entry_selection_update.connect(self.handle_entry_selection_update)
+        self.project.application_state.signal_timeline_lock_update.connect(self.handle_timeline_lock_update)
 
         self.current_frame = self.project.application_state.rendered_frame.visual_frame
+        self.frame_to_widget: QTransform = QTransform()  # Frame to widget transform
+        self.target_rect: QRect = QRect()  # Rectangle containing the visible frame
+        self.frame_scale_factor: float = 0  # Scaling factor from widget pixels to frame pixels
 
         self.panel_type = 'ViewportPanel'
 
@@ -25,52 +32,45 @@ class ViewportPanel(BasePanel):
         self.transparency_background = QColor("#000000")
         self.checkerboard_size = 16  # px
 
+        self.padding = 32  # px of padding around the frame
+
+        self.update_frame_transform()
+        self.calculate_frame_scaling_factor()
+
     @pyqtSlot()
     def handle_frame_update(self):
         """A new rendered frame is available"""
         self.current_frame = self.project.application_state.rendered_frame.visual_frame
         self.update()
 
+    @pyqtSlot()
+    def handle_entry_selection_update(self):
+        """Called when the selection status of the entries change"""
+        self.update()
+
+    @pyqtSlot()
+    def handle_timeline_lock_update(self):
+        """Called when the lock status of the timeline changes"""
+        self.stop_mouse_action()
+
     def paintEvent(self, event: QPaintEvent):
         """Draw the frame. Keep aspect ratio"""
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Fill entire widget with background colour
         painter.fillRect(QRect(0, 0, self.width(), self.height()), QColor(ACTIVE_THEME.background))
 
-        # Get frame dimensions
-        frame_width = self.current_frame.width()
-        frame_height = self.current_frame.height()
-
-        assert frame_width != 0 and frame_height != 0, f"Framebuffer has zero area ({frame_width, frame_height}) px"
-
-        # Calculate aspect ratio
-        frame_aspect = frame_width / frame_height
-        widget_aspect = self.width() / self.height()
-
-        # Determine scaling based on limiting dimension
-        if widget_aspect > frame_aspect:
-            # Widget is wider, height is limiting
-            target_height = self.height()
-            target_width = int(target_height * frame_aspect)
-        else:
-            # Widget is taller, width is limiting
-            target_width = self.width()
-            target_height = int(target_width / frame_aspect)
-
-        # Centre the frame
-        x_offset = (self.width() - target_width) // 2
-        y_offset = (self.height() - target_height) // 2
-
-        target_rect = QRect(x_offset, y_offset, target_width, target_height)
-
         if self.draw_transparency_indicator:
-            self._draw_transparency_checkerboard(x_offset, y_offset, target_width, target_height, painter)
+            self._draw_transparency_checkerboard(self.target_rect.x(), self.target_rect.y(),
+                                                 self.target_rect.width(), self.target_rect.height(), painter)
         else:
-            painter.fillRect(target_rect, self.transparency_background)
+            painter.fillRect(self.target_rect, self.transparency_background)
 
-        # Draw the frame on top
-        painter.drawImage(target_rect, self.current_frame)
+        painter.drawImage(self.target_rect, self.current_frame)
+
+        painter.setTransform(self.frame_to_widget)
+        for entry in self.project.application_state.rendered_entries:
+            entry.timeline_object.paint_viewport_overlay(painter, self.frame_scale_factor)
 
     def _draw_transparency_checkerboard(self, x_offset, y_offset, target_width, target_height, painter):
         """
@@ -113,3 +113,144 @@ class ViewportPanel(BasePanel):
             painter.fillRect(x_offset + (col_count + 1) * checker_size, start_y, target_width - col_count * checker_size, target_height - row * checker_size, self.checkerboard_dark)
         else:
             painter.fillRect(x_offset + (col_count + 1) * checker_size, start_y, target_width - col_count * checker_size, target_height - row * checker_size, self.checkerboard_light)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        """Work out which entry should be activated and pass it forward"""
+        if self.project.application_state.is_timeline_locked:
+            event.ignore()
+            return
+        inverted, invertible = self.frame_to_widget.inverted()
+        if not invertible:
+            event.ignore()
+            return
+
+        frame_mouse_pos = inverted.map(event.position())
+
+        # Find which entry was clicked, giving priority to currently selected entry
+        clicked_entry = None
+        selected_entry = self.project.application_state.selected_entry
+
+        if (selected_entry is not None and selected_entry in self.project.application_state.rendered_entries and
+                selected_entry.timeline_object.check_viewport_mouse_collision(frame_mouse_pos, self.frame_scale_factor)):
+            clicked_entry = selected_entry
+        else:
+            for entry in self.project.application_state.rendered_entries[::-1]:
+                if entry.timeline_object.check_viewport_mouse_collision(frame_mouse_pos, self.frame_scale_factor):
+                    clicked_entry = entry
+                    break
+
+        # Update selections
+        changed_selection = False
+        if selected_entry is not clicked_entry and selected_entry is not None:
+            changed_selection = True
+            selected_entry.timeline_object.ui_is_selected = False
+
+        for entry in self.project.application_state.rendered_entries:
+            should_be_selected = (entry == clicked_entry)
+            if entry.timeline_object.ui_is_selected != should_be_selected:
+                changed_selection = True
+                entry.timeline_object.ui_is_selected = should_be_selected
+
+        if clicked_entry != selected_entry:
+            changed_selection = True
+            self.project.application_state.selected_entry = clicked_entry
+
+        if changed_selection:
+            self.project.application_state.signal_entry_selection_update.emit()
+
+        if clicked_entry is not None:
+            if clicked_entry.timeline_object.viewport_mouse_press(frame_mouse_pos, self.frame_scale_factor):
+                self.update()
+
+        event.ignore()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """Pass to selected entry"""
+        if self.project.application_state.is_timeline_locked:
+            event.ignore()
+            return
+
+        if self.project.application_state.selected_entry is not None:
+            selected_entry = self.project.application_state.selected_entry
+            if selected_entry.timeline_object.viewport_mouse_release():
+                self.update()
+
+        event.ignore()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        """Pass to selected entry"""
+        if self.project.application_state.is_timeline_locked:
+            event.ignore()
+            return
+        inverted, invertible = self.frame_to_widget.inverted()
+        if not invertible:
+            event.ignore()
+            return
+
+        frame_mouse_pos = inverted.map(event.position())
+        if self.project.application_state.selected_entry is not None:
+            selected_entry = self.project.application_state.selected_entry
+            update, re_render = selected_entry.timeline_object.viewport_mouse_move(frame_mouse_pos, self.frame_scale_factor)
+            if re_render:
+                self.project.application_state.rendered_frame.visual_frame = self.project.timeline.render_frame(self.project.application_state.current_playback_frame)
+                self.project.application_state.signal_frame_buffer_update.emit()
+            if update:
+                self.update()
+
+        event.ignore()
+
+    def resizeEvent(self, event: QResizeEvent):
+        """Recalculate frame transform whenever widget is resized"""
+        super().resizeEvent(event)
+        self.update_frame_transform()
+        self.calculate_frame_scaling_factor()
+
+    def update_frame_transform(self):
+        """Calculate the transform from frame coordinates to widget coordinates"""
+        frame_width = self.current_frame.width()
+        frame_height = self.current_frame.height()
+
+        if frame_width == 0 or frame_height == 0:
+            self.frame_to_widget = QTransform()
+            self.target_rect = QRect()
+            return
+
+        frame_aspect = frame_width / frame_height
+        widget_aspect = self.width() / self.height()
+
+        if widget_aspect > frame_aspect:
+            target_height = max(1, self.height() - self.padding)
+            target_width = int(target_height * frame_aspect)
+        else:
+            target_width = max(1, self.width() - self.padding)
+            target_height = int(target_width / frame_aspect)
+
+        x_offset = (self.width() - target_width) // 2
+        y_offset = (self.height() - target_height) // 2
+
+        self.target_rect = QRect(x_offset, y_offset, target_width, target_height)
+
+        visual_frame_width = self.project.application_state.rendered_frame.visual_frame.width()
+        visual_frame_height = self.project.application_state.rendered_frame.visual_frame.height()
+        scale_x = target_width / visual_frame_width
+        scale_y = target_height / visual_frame_height
+
+        self.frame_to_widget = QTransform(scale_x, 0, 0,
+                                          0, scale_y, 0,
+                                          x_offset, y_offset, 1)
+
+    def calculate_frame_scaling_factor(self):
+        """Determine and store scaling factor of a widget pixel vs frame pixel.
+        Used to perform mouse collision checks"""
+
+        # Convert handle size from window pixels to framebuffer pixels
+        origin_widget = self.frame_to_widget.map(QPointF(0, 0))
+        unit_widget = self.frame_to_widget.map(QPointF(1, 0))
+        self.frame_scale_factor = ((unit_widget.x() - origin_widget.x()) ** 2 + (unit_widget.y() - origin_widget.y()) ** 2) ** 0.5
+
+    def stop_mouse_action(self):
+        """Release and halt mouse actions"""
+        if self.project.application_state.selected_entry is not None:
+            selected_entry = self.project.application_state.selected_entry
+            if selected_entry.timeline_object.viewport_mouse_release():
+                self.update()

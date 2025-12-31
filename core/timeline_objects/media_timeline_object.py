@@ -123,4 +123,4 @@ class AudioMediaTimelineObject(TimelineObject):
         super().deserialise_object(serial_representation)
         self.sample_offset = serial_representation.get('sample_offset', 0)
         self.n_channels = serial_representation.get('channels', 1)
-        self.object_resource = self.application_state.resource_manager.get_resource_by_resource_id(serial_representation.get('resource_id')) if 'resource_id' in serial_representation else None
+        self.set_audio_resource(self.application_state.resource_manager.get_resource_by_resource_id(serial_representation.get('resource_id')) if 'resource_id' in serial_representation else None)
