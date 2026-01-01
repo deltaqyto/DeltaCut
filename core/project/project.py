@@ -44,6 +44,8 @@ class Project:
         self.application_state.project_settings.deserialise(serialised_data.get('project_settings'))
         self.application_state.resource_manager.deserialise_resources(serialised_data.get('resources'))
         self.timeline = Timeline(self.application_state, serialised_data=serialised_data.get('timeline'))
+        self.application_state.signal_timeline_content_update.emit()
+        self.application_state.signal_timeline_lock_update.emit()
 
     def create_new_project(self):
         """Reset to a new project"""
