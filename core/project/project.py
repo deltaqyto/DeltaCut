@@ -3,8 +3,10 @@ import zipfile
 import io
 
 from core.application_state import ApplicationState
+from core.resources.resources import BaseResource
 from core.resources.resources_type_registry import RESOURCES_FILE_TYPE_REGISTRY, get_resource_type_from_file_type, RESOURCES_TYPE_REGISTRY
 from core.timeline import Timeline
+from core.resources.resource_manager import ResourceManager
 from core.timeline_objects.timeline_objects_type_registry import TIMELINE_OBJECT_RESOURCE_TYPE_REGISTRY, TIMELINE_OBJECT_TYPE_REGISTRY
 
 
@@ -20,7 +22,9 @@ class Project:
         """
         Initialise a new project.
         """
+        self.resource_manager = ResourceManager()
         self.application_state: ApplicationState = application_state
+        self.application_state.resource_manager = self.resource_manager
         self.timeline: Timeline = Timeline(application_state)
 
     def serialise(self):
@@ -40,6 +44,8 @@ class Project:
         self.application_state.project_settings.deserialise(serialised_data.get('project_settings'))
         self.application_state.resource_manager.deserialise_resources(serialised_data.get('resources'))
         self.timeline = Timeline(self.application_state, serialised_data=serialised_data.get('timeline'))
+        self.application_state.signal_timeline_content_update.emit()
+        self.application_state.signal_timeline_lock_update.emit()
 
     def create_new_project(self):
         """Reset to a new project"""
@@ -79,6 +85,9 @@ class Project:
         Args:
             filename: Path to the project ZIP file to load.
         """
+        BaseResource.clear_all_registries()
+        self.resource_manager = ResourceManager()
+        self.application_state.resource_manager = self.resource_manager
         with zipfile.ZipFile(filename, 'r') as zip_file:
             json_content = zip_file.read('project.json').decode('utf-8')
             serialised_data = json.loads(json_content)
@@ -96,6 +105,7 @@ class Project:
     def set_application_state(self, application_state: ApplicationState):
         """Set application state to all sub items"""
         self.application_state = application_state
+        self.application_state.resource_manager = self.resource_manager
         self.timeline.set_application_state(application_state)
 
     @staticmethod

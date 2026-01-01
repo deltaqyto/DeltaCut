@@ -71,10 +71,10 @@ class FloatRangeSetting(SettingsBase):
 class ResolutionSetting(SettingsBase):
     """Setting for video resolution (width, height) with independent range validation."""
 
-    def __init__(self, default: Tuple[int, int], min_width: int, max_width: int,
+    def __init__(self, default: list[int, int], min_width: int, max_width: int,
                  min_height: int, max_height: int):
-        if not isinstance(default, tuple) or len(default) != 2:
-            raise TypeError("Default must be a tuple of 2 elements")
+        if len(default) != 2:
+            raise TypeError("Default must be a pair of 2 elements")
         width, height = default
         if not isinstance(width, int) or not isinstance(height, int):
             raise TypeError("Width and height must be integers")
