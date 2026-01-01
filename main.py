@@ -33,6 +33,7 @@ def main():
     transcript_resource.transcripts = transcripts
     transcript_resource.timestamps = timestamps
 
+    project = Project(application_state)
 
     application_state.resource_manager.add_resource(audio_resource_1)
     application_state.resource_manager.add_resource(image_resource_1)
@@ -41,10 +42,8 @@ def main():
 
     # Temporarily hardcode export settings
     application_state.project_settings.export_container.file_path = str(Path("debug") / "output")
-    application_state.project_settings.export_container.export_audio.set_value(False)
+    #application_state.project_settings.export_container.export_video.set_value(False)
     application_state.project_settings.export_codec.audio_codec.set_value('mp3')
-
-    project = Project(application_state)
 
     audio_1 = AudioMediaTimelineObject(application_state, 'Demo Speech', None, audio_resource_1, duration=-1)
     audio_1.attempt_change_object_duration(desired_start_offset=200)
@@ -53,16 +52,15 @@ def main():
     project.timeline.add_entry(200, 2, ImageMediaTimelineObject(application_state, 'Cheetah', None, image_resource_2, 100))
 
     project.save_to_file(str(Path("debug") / "demo_file.deltacut"))
+    project_serial = project.serialise()
 
     project2 = Project(ApplicationState())
-    project_serial = project.serialise()
-    project2.deserialise(project_serial)
-    project2_serial = project2.serialise()
-    assert project_serial == project2_serial
     project2.load_from_file(str(Path("debug") / "demo_file.deltacut"))
+    project2_serial = project2.serialise()
+
     assert project_serial == project2_serial
-    assert transcript_resource.transcripts == transcripts
-    assert transcript_resource.timestamps == timestamps
+
+    assert project.resource_manager is not project2.resource_manager
 
     project2.set_application_state(application_state)  # Application state must be persisted between reserialisation
     window = ApplicationWindow(None, app, project2)
