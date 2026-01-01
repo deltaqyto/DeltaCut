@@ -39,6 +39,7 @@ def main():
     application_state.resource_manager.add_resource(image_resource_1)
     application_state.resource_manager.add_resource(image_resource_2)
     application_state.resource_manager.add_resource(transcript_resource)
+    audio_resource_1.transcript_resource = transcript_resource
 
     # Temporarily hardcode export settings
     application_state.project_settings.export_container.file_path = str(Path("debug") / "output")
