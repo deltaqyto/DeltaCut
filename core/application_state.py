@@ -22,7 +22,7 @@ class Codec:
 
     # Video
     frame_rate: FloatRangeSetting = FloatRangeSetting(30, 1, 300)
-    frame_dimensions: ResolutionSetting = ResolutionSetting((1920, 1080), 16, 4096, 16, 4096)
+    frame_dimensions: ResolutionSetting = ResolutionSetting([1920, 1080], 16, 4096, 16, 4096)
     video_codec: ChoiceSetting = ChoiceSetting("h264", ["h264", "h265", "vp9"])
     video_quality: IntRangeSetting = IntRangeSetting(23, 0, 51)  # CRF value
 
