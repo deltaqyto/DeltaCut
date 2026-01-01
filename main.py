@@ -33,6 +33,7 @@ def main():
     transcript_resource.transcripts = transcripts
     transcript_resource.timestamps = timestamps
 
+    project = Project(application_state)
 
     application_state.resource_manager.add_resource(audio_resource_1)
     application_state.resource_manager.add_resource(image_resource_1)
@@ -43,8 +44,6 @@ def main():
     application_state.project_settings.export_container.file_path = str(Path("debug") / "output")
     #application_state.project_settings.export_container.export_video.set_value(False)
     application_state.project_settings.export_codec.audio_codec.set_value('mp3')
-
-    project = Project(application_state)
 
     audio_1 = AudioMediaTimelineObject(application_state, 'Demo Speech', None, audio_resource_1, duration=-1)
     audio_1.attempt_change_object_duration(desired_start_offset=200)

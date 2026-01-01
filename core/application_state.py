@@ -1,13 +1,13 @@
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from core.timeline import TimelineEntry
+    from core.resources.resource_manager import ResourceManager
 
 from dataclasses import dataclass, field
 
 from PyQt6.QtCore import pyqtSignal, QObject
 from PyQt6.QtGui import QImage, QColor
 
-from core.resources.resource_manager import ResourceManager
 from core.setting.basic_settings import ChoiceSetting, IntRangeSetting, FloatRangeSetting, ResolutionSetting
 
 
@@ -153,7 +153,7 @@ class ApplicationState(QObject):
 
         self.settings: ApplicationSettings = ApplicationSettings()
         self.project_settings: ProjectSettings = ProjectSettings()
-        self.resource_manager: ResourceManager = ResourceManager()
+        self.resource_manager: ResourceManager | None = None
 
         self.rendered_frame: FrameBuffer = FrameBuffer(*self.project_settings.playback_codec.frame_dimensions.get_value(), QColor(0, 0, 0, 0))
         self.rendered_entries: list[TimelineEntry] = []  # List of timeline entries that got rendered onto the frame. Sorted by order of rendering (last index rendered last)
