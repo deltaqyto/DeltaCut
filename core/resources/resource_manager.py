@@ -44,6 +44,10 @@ class ResourceManager:
 
             self.resources[resource_id] = resource_class(serialised_data=resource_data)
 
+        # Resolve cross-resource references (eg transcript pointers
+        for resource in self.resources.values():
+            resource.resolve_references(self)
+
     def export_resource_files(self):
         """Allow all internally defined resource files to be exported for saving. Also saves a manifest"""
         resource_files: dict[str, bytes] = {}  # filename, resource data

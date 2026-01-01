@@ -138,6 +138,11 @@ class BaseResource:
     def import_resource_file(self, resource_file: bytes):
         raise NotImplementedError(f"{self.__class__.__name__} did not implement resource file imports")
 
+    def resolve_references(self, resource_manager):
+        """Override in subclasses that have references to other resources
+        All resources are loaded when this is called"""
+        pass
+
     @staticmethod
     def clear_all_registries():
         """Clear all resource registries across all subclasses.
