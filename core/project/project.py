@@ -3,6 +3,7 @@ import zipfile
 import io
 
 from core.application_state import ApplicationState
+from core.resources.resources import BaseResource
 from core.resources.resources_type_registry import RESOURCES_FILE_TYPE_REGISTRY, get_resource_type_from_file_type, RESOURCES_TYPE_REGISTRY
 from core.timeline import Timeline
 from core.resources.resource_manager import ResourceManager
@@ -82,6 +83,7 @@ class Project:
         Args:
             filename: Path to the project ZIP file to load.
         """
+        BaseResource.clear_all_registries()
         self.resource_manager = ResourceManager()
         self.application_state.resource_manager = self.resource_manager
         with zipfile.ZipFile(filename, 'r') as zip_file:

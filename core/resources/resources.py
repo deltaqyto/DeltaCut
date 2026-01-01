@@ -29,7 +29,8 @@ class BaseResource:
         audio = AudioResource("notarealfile", skip_loading_resource=True)
         audio.data = somedata
     """
-
+    
+    _all_registries = []  # Track all subclass registries
     def __new__(cls, path=None, skip_loading_resource=False, serialised_data=None, **kwargs):
         """Create or retrieve cached resource instance.
 
@@ -44,6 +45,7 @@ class BaseResource:
 
         if not hasattr(cls, '_registry'):
             cls._registry = {}
+            BaseResource._all_registries.append(cls._registry)
 
         if path in cls._registry:
             existing = cls._registry[path]()
@@ -135,6 +137,13 @@ class BaseResource:
 
     def import_resource_file(self, resource_file: bytes):
         raise NotImplementedError(f"{self.__class__.__name__} did not implement resource file imports")
+
+    @staticmethod
+    def clear_all_registries():
+        """Clear all resource registries across all subclasses.
+        Call before deserialising to ensure fresh resource instances."""
+        for registry in BaseResource._all_registries:
+            registry.clear()
 
 
 

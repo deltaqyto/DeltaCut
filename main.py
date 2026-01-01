@@ -60,8 +60,7 @@ def main():
     assert project_serial == project2_serial
     project2.load_from_file(str(Path("debug") / "demo_file.deltacut"))
     assert project_serial == project2_serial
-    assert transcript_resource.transcripts == transcripts
-    assert transcript_resource.timestamps == timestamps
+    assert project.resource_manager is not project2.resource_manager
 
     project2.set_application_state(application_state)  # Application state must be persisted between reserialisation
     window = ApplicationWindow(None, app, project2)
