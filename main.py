@@ -52,14 +52,14 @@ def main():
     project.timeline.add_entry(200, 2, ImageMediaTimelineObject(application_state, 'Cheetah', None, image_resource_2, 100))
 
     project.save_to_file(str(Path("debug") / "demo_file.deltacut"))
+    project_serial = project.serialise()
 
     project2 = Project(ApplicationState())
-    project_serial = project.serialise()
-    project2.deserialise(project_serial)
-    project2_serial = project2.serialise()
-    assert project_serial == project2_serial
     project2.load_from_file(str(Path("debug") / "demo_file.deltacut"))
+    project2_serial = project2.serialise()
+
     assert project_serial == project2_serial
+
     assert project.resource_manager is not project2.resource_manager
 
     project2.set_application_state(application_state)  # Application state must be persisted between reserialisation
