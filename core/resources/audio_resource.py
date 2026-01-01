@@ -1,5 +1,6 @@
 import librosa
 from core.resources.resources import BaseResource, BaseReadHead
+from core.resources.transcript_resource import TranscriptResource
 
 
 class AudioResource(BaseResource):
@@ -33,6 +34,8 @@ class AudioResource(BaseResource):
         self.duration = None
         self.n_channels = None
         self.n_samples = None
+        self.transcript_resource: TranscriptResource | None = None  # Reference to actual bound transcript
+        self.transcript_id: str | None = None  # Resource ID for bound transcript
         super().__init__(path, skip_loading_resource, resource_id, serialised_data)
         if self.data is None:  # If the resource manager is reloaded mid execution, it does not clear the cache. Manually check to ensure the data exists
             self._load()
@@ -74,6 +77,7 @@ class AudioResource(BaseResource):
         serialised_data.update({
             'sample_rate': self.sample_rate,
             'force_mono': self.force_mono,
+            'transcript_id': self.transcript_resource.resource_id if self.transcript_resource is not None else None,
             'resource_type': 'AudioResource'
         })
         return serialised_data
@@ -83,6 +87,13 @@ class AudioResource(BaseResource):
         super().deserialise_resource(serialised_data)
         self.force_mono = serialised_data.get('force_mono', False)
         self.sample_rate = serialised_data.get('sample_rate')
+        self.transcript_id = serialised_data.get('transcript_id')
+
+    def resolve_references(self, resource_manager):
+        """Find and bind transcript resource if previously set"""
+        if self.transcript_id:
+            self.transcript_resource = resource_manager.get_resource_by_resource_id(self.transcript_id)
+            self.transcript_id = None
 
 
 class AudioReadHead(BaseReadHead):
