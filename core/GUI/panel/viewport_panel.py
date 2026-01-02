@@ -172,8 +172,9 @@ class ViewportPanel(BasePanel):
 
         if self.project.application_state.selected_entry is not None:
             selected_entry = self.project.application_state.selected_entry
-            if selected_entry.timeline_object.viewport_mouse_release():
-                self.update()
+            if selected_entry.timeline_object.can_play_video:  # Only visible objects can draw an overlay
+                if selected_entry.timeline_object.viewport_mouse_release():
+                    self.update()
 
         event.ignore()
 
@@ -190,11 +191,12 @@ class ViewportPanel(BasePanel):
         frame_mouse_pos = inverted.map(event.position())
         if self.project.application_state.selected_entry is not None:
             selected_entry = self.project.application_state.selected_entry
-            update, re_render = selected_entry.timeline_object.viewport_mouse_move(frame_mouse_pos, self.frame_scale_factor)
-            if re_render:
-                self.project.render_current_frame_to_buffer()
-            if update:
-                self.update()
+            if selected_entry.timeline_object.can_play_video:  # Only visible objects can draw an overlay
+                update, re_render = selected_entry.timeline_object.viewport_mouse_move(frame_mouse_pos, self.frame_scale_factor)
+                if re_render:
+                    self.project.render_current_frame_to_buffer()
+                if update:
+                    self.update()
 
         event.ignore()
 
