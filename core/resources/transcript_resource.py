@@ -31,20 +31,26 @@ class TranscriptResource(BaseResource):
         assert 'transcripts' in data, "Missing 'transcripts' key in JSON data"
         assert 'timestamps' in data, "Missing 'timestamps' key in JSON data"
 
-        assert isinstance(data['transcripts'], list), "transcripts must be a list"
-        assert all(isinstance(t, (list, tuple)) and len(t) == 2 for t in data['transcripts']), "All transcripts must be pairs"
-        assert all(isinstance(t[0], str) and isinstance(t[1], str) for t in data['transcripts']), "All transcript pairs must be (str, str)"
+        self.load_from_data(data['transcripts'], data['timestamps'])
 
-        assert isinstance(data['timestamps'], list), "timestamps must be a list"
-        assert all(isinstance(t, int) for t in data['timestamps']), "All timestamps must be integers"
+    def load_from_data(self, transcripts, timestamps):
+        """Load from directly provided transcript and timestamp"""
+
+        assert isinstance(transcripts, list), "transcripts must be a list"
+        assert all(isinstance(t, (list, tuple)) and len(t) == 2 for t in transcripts), "All transcripts must be pairs"
+        assert all(isinstance(t[0], str) and isinstance(t[1], str) for t in transcripts), "All transcript pairs must be (str, str)"
+
+        assert isinstance(timestamps, list), "timestamps must be a list"
+        assert all(isinstance(t, int) for t in timestamps), "All timestamps must be integers"
+
 
         self.transcript_entries = {}
         self.transcript_order = []
-        for entry in data['transcripts']:
+        for entry in transcripts:
             entry_id = str(uuid4())
             self.transcript_order.append(entry_id)
             self.transcript_entries[entry_id] = tuple(entry)
-        self.timestamps = data['timestamps']
+        self.timestamps = timestamps
 
         assert len(self.transcript_order) == len(self.timestamps), f"Transcript Resource: transcripts ({len(self.transcript_order)}) != timestamps ({len(self.timestamps)})"
 
