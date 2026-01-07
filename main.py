@@ -30,8 +30,7 @@ def main():
     timestamps = [0, 20, 35, 55, 95,
                   116, 167, 200,
                   260, 345, 383]
-    transcript_resource.transcripts = transcripts
-    transcript_resource.timestamps = timestamps
+    transcript_resource.load_from_data(transcripts, timestamps)
 
     project = Project(application_state)
 

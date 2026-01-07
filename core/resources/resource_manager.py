@@ -1,7 +1,5 @@
 import json
 
-from pydantic.v1 import UUID4
-
 from core.resources.resources import BaseResource
 from core.resources.resources_type_registry import RESOURCES_TYPE_REGISTRY
 
