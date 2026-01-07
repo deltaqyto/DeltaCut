@@ -1,5 +1,6 @@
 import json
 from bisect import bisect_right
+from uuid import UUID, uuid4
 
 from core.resources.resources import BaseResource, BaseReadHead
 
@@ -11,7 +12,8 @@ class TranscriptResource(BaseResource):
     """
 
     def __init__(self, path=None, skip_loading_resource=False, resource_id=None, serialised_data=None):
-        self.transcripts: list[tuple[str, str]] = []
+        self.transcript_entries: dict[UUID, tuple[str, str]] = {}
+        self.transcript_order: list[UUID] = []
         self.timestamps: list[int] = []
         super().__init__(path, skip_loading_resource, resource_id, serialised_data)
         if self.path is not None:
@@ -36,16 +38,21 @@ class TranscriptResource(BaseResource):
         assert isinstance(data['timestamps'], list), "timestamps must be a list"
         assert all(isinstance(t, int) for t in data['timestamps']), "All timestamps must be integers"
 
-        self.transcripts = [tuple(t) for t in data['transcripts']]
+        self.transcript_entries = {}
+        self.transcript_order = []
+        for entry in data['transcripts']:
+            entry_id = str(uuid4())
+            self.transcript_order.append(entry_id)
+            self.transcript_entries[entry_id] = tuple(entry)
         self.timestamps = data['timestamps']
 
-        assert len(self.transcripts) == len(self.timestamps), f"Transcript Resource: transcripts ({len(self.transcripts)}) != timestamps ({len(self.timestamps)})"
+        assert len(self.transcript_order) == len(self.timestamps), f"Transcript Resource: transcripts ({len(self.transcript_order)}) != timestamps ({len(self.timestamps)})"
 
     def export_resource_file(self) -> (str, bytes):
         """Exports the transcript as a .json"""
 
         data = {
-            'transcripts': self.transcripts,
+            'transcripts': [self.transcript_entries[entry_id] for entry_id in self.transcript_order],
             'timestamps': self.timestamps
         }
 
@@ -57,11 +64,6 @@ class TranscriptResource(BaseResource):
     def import_resource_file(self, resource_file: bytes):
         data = json.loads(resource_file.decode('utf-8'))
         self._load(data)
-
-    def __del__(self):
-        """Release data from memory."""
-        self.transcripts: list[str] = []
-        self.timestamps: list[int] = []
 
     def get_read_head(self):
         """Instance and return a read head."""
@@ -88,16 +90,16 @@ class TranscriptReadHead(BaseReadHead):
         super().__init__(resource)
 
     def read(self, position=None, count=None):
-        """Returns transcript entry visible at provided frame
+        """Returns transcript timestamp, uuid and entry visible at provided frame
 
         Args:
             position: Frame position
             count: Ignored
 
         Returns:
-            None if nothing is visible, or (frames: when the entry was first visible, text for that entry)
+            None if nothing is visible, or (frames when the entry was first visible, entry uuid as a string and tuple of (speaker, text))
         """
-        if not self.resource.transcripts:
+        if not self.resource.timestamps:
             return None
 
         idx = bisect_right(self.resource.timestamps, position) - 1
@@ -105,4 +107,5 @@ class TranscriptReadHead(BaseReadHead):
         if idx < 0:
             return None
 
-        return self.resource.timestamps[idx], self.resource.transcripts[idx]
+        entry_id = self.resource.transcript_order[idx]
+        return self.resource.timestamps[idx], entry_id, self.resource.transcript_entries[entry_id]
